@@ -38,8 +38,11 @@ def extract_vpn_sections(text: str, vendor: str) -> str:
     if vendor == "cradlepoint":
         keep = [l.rstrip() for l in text.splitlines() if "vpn/tunnels" in l]
         return "\n".join(keep) + ("\n" if keep else "")
-    if vendor == "pfsense":
+    if vendor in ("pfsense", "strongswan"):
         return _extract_brace_blocks(text, ("connections", "secrets"))
+    if vendor == "mikrotik":
+        keep = [l.rstrip() for l in text.splitlines() if "/ip ipsec" in l]
+        return "\n".join(keep) + ("\n" if keep else "")
     if vendor == "fortinet":
         keep, grab = [], False
         for line in text.splitlines():
@@ -96,10 +99,16 @@ def detect_vendor(text: str) -> str:
     if re.search(r"crypto ikev[12] (policy|ipsec-proposal)", text) \
             or re.search(r"^\s*crypto map ", text, re.M) or "tunnel-group" in text:
         return "cisco_firepower"
+    if "/ip ipsec" in text:
+        return "mikrotik"
     if "config set vpn/tunnels" in text:
         return "cradlepoint"
+    # Native strongSwan swanctl also uses `connections {`; distinguish from pfSense
+    # by the absence of pfSense markers — default such swanctl to strongSwan.
     if "connections {" in text or "esp_proposals" in text or "swanctl" in text:
-        return "pfsense"
+        if "pfsense" in text.lower() or "pfSense" in text:
+            return "pfsense"
+        return "strongswan"
     if re.search(r"^\s*ipsec\s+\S+\s+\S", text, re.M):
         return "digi"
     return "juniper_srx"
@@ -198,6 +207,11 @@ def import_site(text: str, name: str | None = None) -> dict:
         profile = _import_palo(text, name)
     elif vendor == "cisco_firepower":
         profile = _import_cisco(text, name)
+    elif vendor == "strongswan":
+        profile = _import_pfsense(text, name)   # identical swanctl syntax
+        profile.vendor = "strongswan"
+    elif vendor == "mikrotik":
+        profile = _import_mikrotik(text, name)
     else:
         profile = _import_srx(text, name)
     vpn_only = extract_vpn_sections(text, vendor)
@@ -613,6 +627,44 @@ def _import_cisco(text: str, name: str | None) -> VpnProfile:
     elif "pre-shared-key" in text or "pre-share" in text:
         p1.auth_method = "psk"
     return VpnProfile(name=inferred or "imported-cisco", vendor=v, local=local,
+                      remote=remote, phase1=p1, phase2=p2)
+
+
+def _import_mikrotik(text: str, name: str | None) -> VpnProfile:
+    v = "mikrotik"
+    p1, p2 = Phase1(), Phase2()
+    local, remote = Endpoint(name="local"), Endpoint(name="remote")
+    inferred = name
+    if m := re.search(r"/ip ipsec peer add name=(\S+)", text):
+        inferred = inferred or m.group(1)
+    if m := re.search(r"profile add[^\n]*hash-algorithm=(\S+)", text):
+        p1.integrity = _reverse(INTEGRITY, v, m.group(1))
+    if m := re.search(r"profile add[^\n]*enc-algorithm=(\S+)", text):
+        p1.encryption = _reverse(ENCRYPTION, v, m.group(1) + ("-cbc" if "gcm" not in m.group(1)
+                                                              and m.group(1).startswith("aes") else ""))
+    if m := re.search(r"profile add[^\n]*dh-group=(\S+)", text):
+        p1.dh_group = _reverse(DH_GROUPS, v, m.group(1))
+    if m := re.search(r"proposal add[^\n]*enc-algorithms=(\S+)", text):
+        p2.encryption = _reverse(ENCRYPTION, v, m.group(1))
+    if m := re.search(r"proposal add[^\n]*auth-algorithms=(\S+)", text):
+        p2.integrity = _reverse(INTEGRITY, v, m.group(1))
+    if m := re.search(r"proposal add[^\n]*pfs-group=(\S+)", text):
+        p2.pfs_group = _reverse(DH_GROUPS, v, m.group(1))
+    if m := re.search(r"peer add[^\n]*address=([^/\s]+)", text):
+        remote.public_ip = m.group(1)
+    if "exchange-mode=ike2" in text:
+        p1.ike_version = "ikev2"
+    elif re.search(r"exchange-mode=(main|aggressive)", text):
+        p1.ike_version = "ikev1"
+    if "auth-method=digital-signature" in text:
+        p1.auth_method = "certificate"
+    elif "auth-method=pre-shared-key" in text:
+        p1.auth_method = "psk"
+    if m := re.search(r"policy add[^\n]*src-address=(\S+)", text):
+        local.protected_subnets = [m.group(1)]
+    if m := re.search(r"policy add[^\n]*dst-address=(\S+)", text):
+        remote.protected_subnets = [m.group(1)]
+    return VpnProfile(name=inferred or "imported-mikrotik", vendor=v, local=local,
                       remote=remote, phase1=p1, phase2=p2)
 
 

@@ -63,6 +63,8 @@ class Vendor(str, enum.Enum):
     cisco_firepower = "cisco_firepower"
     fortinet = "fortinet"
     palo_alto = "palo_alto"
+    strongswan = "strongswan"
+    mikrotik = "mikrotik"
 
     @property
     def label(self) -> str:
@@ -82,6 +84,8 @@ _VENDOR_LABELS = {
     "cisco_firepower": "Cisco Firepower",
     "fortinet": "Fortinet",
     "palo_alto": "Palo Alto",
+    "strongswan": "strongSwan",
+    "mikrotik": "MikroTik",
 }
 
 # Only these are validated end-to-end; the rest are generated best-effort.
