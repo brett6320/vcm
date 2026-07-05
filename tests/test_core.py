@@ -29,6 +29,16 @@ def test_warns_on_insecure():
     assert {"encryption", "integrity", "dh-group", "ike-version"} <= kinds
 
 
+def test_warnings_not_duplicated():
+    # IKEv1 + a weak algo shared across P1/P2 must appear once each, not twice.
+    p = _mk_profile(p1={"ike_version": "ikev1", "integrity": "sha1"},
+                    p2={"integrity": "sha1"})
+    messages = [x["message"] for x in all_warnings(p)]
+    assert len(messages) == len(set(messages)), messages
+    ike = [m for m in messages if "ikev1" in m.lower() or "ikev2" in m.lower()]
+    assert len(ike) == 1, ike
+
+
 def test_strong_profile_no_warnings():
     assert all_warnings(_mk_profile()) == []
 
