@@ -2,21 +2,29 @@
   --bg: #ffffff; --fg: #1a1a1a; --muted: #666; --card: #f6f7f9; --border: #d9dde3;
   --accent: #2b6cb0; --accent-fg: #fff; --danger: #c0392b; --warn: #b7791f;
   --ok: #2f855a; --code-bg: #f0f2f5;
+  --link: #1a5fb4; --link-visited: #6b3fa0;
 }
 :root[data-theme="dark"] {
   --bg: #14171c; --fg: #e6e8eb; --muted: #9aa4b0; --card: #1e232b; --border: #2c333d;
   --accent: #4c9be8; --accent-fg: #0b0e12; --danger: #e57373; --warn: #e0b055;
   --ok: #68d391; --code-bg: #0f1319;
+  /* High-contrast link colors for dark backgrounds (WCAG AA on --bg/--card). */
+  --link: #8ab4f8; --link-visited: #d0aaf5;
 }
 @media (prefers-color-scheme: dark) {
   :root[data-theme="system"] {
     --bg: #14171c; --fg: #e6e8eb; --muted: #9aa4b0; --card: #1e232b; --border: #2c333d;
     --accent: #4c9be8; --accent-fg: #0b0e12; --danger: #e57373; --warn: #e0b055;
     --ok: #68d391; --code-bg: #0f1319;
+    --link: #8ab4f8; --link-visited: #d0aaf5;
   }
 }
 * { box-sizing: border-box; }
 body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+/* Content links use theme-aware, high-contrast colors (not browser defaults). */
+a { color: var(--link); }
+a:visited { color: var(--link-visited); }
+a:hover { text-decoration: underline; }
 .topbar { display: flex; align-items: center; gap: 1rem; padding: .6rem 1rem;
   background: var(--card); border-bottom: 1px solid var(--border); }
 .brand { font-weight: 700; text-decoration: none; color: var(--fg); font-size: 1.1rem;

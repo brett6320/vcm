@@ -76,9 +76,18 @@ def all_warnings(p: VpnProfile) -> list[dict]:
 
     w = rate_proposal(p.phase1.encryption, p.phase1.integrity, p.phase1.dh_group,
                       p.phase1.ike_version)
+    # Phase 2 shares the IKE version; rate it as ikev2 so the ike-version warning
+    # (already emitted for phase 1) isn't duplicated here.
     w += rate_proposal(p.phase2.encryption, p.phase2.integrity, p.phase2.pfs_group,
-                       p.phase1.ike_version)
+                       "ikev2")
     if p.phase1.auth_method == "psk":
         w.append({"kind": "auth", "value": "psk", "severity": "weak",
                   "message": "Pre-shared key auth — prefer certificate auth via PKI"})
-    return w
+    # Collapse identical warnings (e.g. the same weak algorithm in P1 and P2).
+    seen, deduped = set(), []
+    for item in w:
+        key = (item["kind"], item["value"], item["message"])
+        if key not in seen:
+            seen.add(key)
+            deduped.append(item)
+    return deduped

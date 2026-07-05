@@ -90,8 +90,12 @@ def _build_profile_from_form(db, name, vendor, model, local_ip, local_id, local_
     )
 
 
-def _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method, psk):
+def _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method, psk,
+                        local_ip=""):
     errors = []
+    if local_ip is not None and not local_ip.strip():
+        # Needed so the far-end/peer config has a real remote gateway address.
+        errors.append("Local public IP (this device's address) is required")
     if not remote_ip.strip():
         errors.append("Remote (far-end) public IP is required")
     if not _subnets(local_subnets):
@@ -123,7 +127,7 @@ def generate_site(request: Request,
                   p1_ver: str = Form(""),
                   p2_enc: str = Form(""), p2_integ: str = Form(""), p2_pfs: str = Form(""),
                   db: Session = Depends(get_db), user: User = Depends(current_user)):
-    errors = _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method, psk)
+    errors = _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method, psk, local_ip)
     if errors:
         return _sites_page(request, db, error="; ".join(errors))
 
@@ -207,7 +211,7 @@ def add_connection(site_id: int, request: Request,
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "Not found")
-    errors = _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method, psk)
+    errors = _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method, psk, local_ip)
     if errors:
         return site_detail(site_id, request, db, user)  # simple: reload page
     cname = _unique_conn_name(db, site.id, conn_name or f"{site.name}-vpn")
