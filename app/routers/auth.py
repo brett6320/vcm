@@ -39,7 +39,9 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
         return render(request, "login.html", error="Invalid credentials")
     sess = sessions.create_session(db, user, ip, mfa_ok=not user.has_mfa)
     audit(db, request, "login.password_ok", f"user={username}", user=user)
-    if user.has_mfa:
+    if user.must_change_password:
+        target = "/account/first-password"  # forced change before MFA
+    elif user.has_mfa:
         target = "/mfa"
     elif s.is_dev:
         target = "/"  # dev mode: skip forced enrollment
@@ -56,6 +58,45 @@ def logout(request: Request, db: Session = Depends(get_db)):
     resp = RedirectResponse("/login", status_code=303)
     resp.delete_cookie(s.session_cookie)
     return resp
+
+
+# ---------------------------------------------- forced first-login change --- #
+@router.get("/account/first-password")
+def first_password_form(request: Request, db: Session = Depends(get_db),
+                        _ip: str = Depends(enforce_ip)):
+    sess, user = _partial_session(request, db)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    if not user.must_change_password:
+        return RedirectResponse("/", status_code=303)
+    return render(request, "first_password.html")
+
+
+@router.post("/account/first-password")
+def first_password_submit(request: Request, current: str = Form(...), new: str = Form(...),
+                          confirm: str = Form(...), db: Session = Depends(get_db),
+                          ip: str = Depends(enforce_ip)):
+    from ..security.passwords import hash_password
+
+    sess, user = _partial_session(request, db)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    err = None
+    if not verify_password(user.password_hash, current):
+        err = "Current password is incorrect"
+    elif new != confirm:
+        err = "New passwords do not match"
+    elif len(new) < 8:
+        err = "New password must be at least 8 characters"
+    elif verify_password(user.password_hash, new):
+        err = "New password must differ from the current one"
+    if err:
+        return render(request, "first_password.html", error=err)
+    user.password_hash = hash_password(new)
+    user.must_change_password = False
+    audit(db, request, "account.first_password_set", user=user)
+    # Continue to MFA enrollment (or app in dev).
+    return RedirectResponse("/", status_code=303)
 
 
 # --------------------------------------------------------------- MFA gate --- #

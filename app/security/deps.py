@@ -57,6 +57,9 @@ def current_user(request: Request, db: Session = Depends(get_db),
     sess, user = _session_and_user(request, db)
     if not user:
         raise AuthRedirect("/login")
+    if user.must_change_password:
+        # Force a password change before anything else, including MFA enrollment.
+        raise AuthRedirect("/account/first-password")
     if user.has_mfa and not sess.mfa_ok:
         raise AuthRedirect("/mfa")
     if not user.has_mfa and not get_settings().is_dev:

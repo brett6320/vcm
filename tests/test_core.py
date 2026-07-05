@@ -212,6 +212,44 @@ def test_hierarchy_lineage_no_private_keys():
         assert "PRIVATE" not in blob and "key_enc" not in blob
 
 
+def test_notify_backends_disabled_by_default():
+    from app import notify
+    ok, detail = notify.send_email("a@b.com", "s", "b")
+    assert not ok and "not configured" in detail
+    ok, detail = notify.send_sms("+15551230000", "hi")
+    assert not ok and "not configured" in detail
+    assert not notify.email_enabled() and not notify.sms_enabled()
+
+
+def test_forced_password_change_flow():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role
+    from app.security.passwords import hash_password
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="newop").first():
+                db.add(User(username="newop", password_hash=hash_password("temp1234"),
+                            role=Role.operator, must_change_password=True))
+                db.commit()
+        r = c.post("/login", data={"username": "newop", "password": "temp1234"},
+                   follow_redirects=False)
+        assert r.headers["location"] == "/account/first-password"
+        # dashboard blocked until the password is changed
+        assert c.get("/", follow_redirects=False).headers["location"] == "/account/first-password"
+        assert "incorrect" in c.post("/account/first-password",
+            data={"current": "wrong", "new": "brandnew99", "confirm": "brandnew99"}).text
+        assert "differ" in c.post("/account/first-password",
+            data={"current": "temp1234", "new": "temp1234", "confirm": "temp1234"}).text
+        r = c.post("/account/first-password",
+                   data={"current": "temp1234", "new": "brandnew99", "confirm": "brandnew99"},
+                   follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/"
+        # flag cleared → the next gate is MFA enrollment (prod default)
+        assert c.get("/", follow_redirects=False).headers["location"] == "/mfa/enroll"
+
+
 def test_multiple_passkeys_per_user():
     from app.db import SessionLocal, init_db
     from app.models import User, WebAuthnCredential

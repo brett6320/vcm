@@ -56,6 +56,27 @@ class Settings(BaseSettings):
     rp_name: str = "VCM"
     rp_origin: str = "http://localhost:8000"
 
+    # --- Notifications -----------------------------------------------------
+    # Email backend: "none" | "smtp" | "mailgun". SMS backend: "none" | "twilio".
+    email_backend: str = "none"
+    sms_backend: str = "none"
+    notify_from_email: str = "vcm@localhost"
+    notify_from_name: str = "VCM"
+    # SMTP
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_starttls: bool = True
+    # Mailgun
+    mailgun_domain: str = ""
+    mailgun_api_key: str = ""
+    mailgun_base_url: str = "https://api.mailgun.net"
+    # Twilio
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
+
     # PKI defaults
     default_key_type: str = "ec"  # "ec" or "rsa"
     default_ec_curve: str = "secp384r1"

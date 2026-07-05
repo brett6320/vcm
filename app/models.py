@@ -103,6 +103,13 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[Role] = mapped_column(_enum_col(Role), default=Role.operator)
     disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Contact / identity
+    first_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)  # E.164 for SMS
+    # Force a password change on next login (e.g. admin-created accounts).
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
     # TOTP secret, AES-GCM encrypted at rest (nonce||ct). Nullable until enrolled.
     totp_secret_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     totp_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -115,6 +122,11 @@ class User(Base):
     @property
     def has_mfa(self) -> bool:
         return self.totp_confirmed or any(c for c in self.credentials)
+
+    @property
+    def display_name(self) -> str:
+        full = " ".join(x for x in (self.first_name, self.last_name) if x)
+        return full or self.username
 
 
 class WebAuthnCredential(Base):
