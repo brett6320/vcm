@@ -76,6 +76,26 @@ docker compose -f docker-compose.yml -f deploy/cloudflared.yml up -d   # Cloudfl
 See `deploy/cloudflared.md` for why trusted-proxy configuration is critical to
 keep the IP allowlist un-spoofable.
 
+## Encryption in flight & at rest
+
+**In flight**
+- **Client → app**: TLS terminated at Traefik (`docker-compose.traefik.yml`) with
+  HTTP→HTTPS redirect, HSTS + secure headers, and `VCM_COOKIE_SECURE=true`.
+  (Behind Cloudflare Tunnel / NGINX the same TLS guarantee applies.)
+- **App → Postgres**: TLS enforced via `sslmode=require` (Postgres runs with
+  `ssl=on`; server cert auto-generated). Set `POSTGRES_SSLMODE=verify-full` with a
+  mounted CA to also pin the DB identity. Verified: connections report `TLSv1.3`.
+
+**At rest**
+- **CA private keys** and **TOTP seeds** are encrypted with **AES-256-GCM** using
+  the app KEK (`VCM_KEK_B64`) and are never returned by any API.
+- **Passwords** are Argon2id hashes (not reversible).
+- **Imported configs** have PSKs/`encrypted-password` redacted before storage.
+- The database volume itself relies on **host/volume encryption** (LUKS, encrypted
+  EBS/EFS, etc.) — enable it on the `vcm-data` / `pg-data` volumes in production.
+  The most sensitive material (CA keys, TOTP) is already app-encrypted regardless.
+- Prefer **certificate auth** over PSK for VPNs so no shared secret is stored.
+
 ## Security notes
 
 - `VCM_KEK_B64` wraps every CA private key. **Back it up separately** — losing it
