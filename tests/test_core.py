@@ -260,6 +260,31 @@ def test_forced_password_change_flow():
         assert c.get("/", follow_redirects=False).headers["location"] == "/mfa/enroll"
 
 
+def test_schema_sync_adds_missing_columns():
+    import tempfile
+    from sqlalchemy import create_engine, inspect, text
+    import app.models  # noqa: F401  register tables
+    from app.db import add_missing_columns
+    dbf = tempfile.mktemp(suffix=".db")
+    eng = create_engine(f"sqlite:///{dbf}", future=True)
+    try:
+        with eng.begin() as c:
+            c.execute(text("CREATE TABLE users (id INTEGER PRIMARY KEY, username VARCHAR, "
+                           "password_hash VARCHAR, role VARCHAR, disabled BOOLEAN, "
+                           "totp_secret_enc BLOB, totp_confirmed BOOLEAN, created_at DATETIME)"))
+            c.execute(text("INSERT INTO users (id, username, password_hash) VALUES (1,'a','x')"))
+        add_missing_columns(eng)
+        cols = {c["name"] for c in inspect(eng).get_columns("users")}
+        assert {"first_name", "last_name", "email", "phone",
+                "must_change_password"} <= cols
+        with eng.begin() as c:
+            # existing row survives; boolean default applied
+            val = c.execute(text("SELECT must_change_password FROM users WHERE id=1")).scalar()
+            assert not val
+    finally:
+        os.path.exists(dbf) and os.remove(dbf)
+
+
 def test_multiple_passkeys_per_user():
     from app.db import SessionLocal, init_db
     from app.models import User, WebAuthnCredential
