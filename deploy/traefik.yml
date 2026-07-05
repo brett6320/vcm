@@ -1,0 +1,34 @@
+# Traefik overlay: docker compose -f docker-compose.yml -f deploy/traefik.yml up -d
+services:
+  vcm:
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.vcm.rule: "Host(`vcm.example.com`)"
+      traefik.http.routers.vcm.entrypoints: "websecure"
+      traefik.http.routers.vcm.tls.certresolver: "le"
+      traefik.http.services.vcm.loadbalancer.server.port: "8000"
+    environment:
+      VCM_RP_ID: "vcm.example.com"
+      VCM_RP_ORIGIN: "https://vcm.example.com"
+      VCM_COOKIE_SECURE: "true"
+      # Traefik forwards X-Forwarded-For; trust Traefik's container IP range.
+      VCM_TRUSTED_PROXIES: "172.16.0.0/12"
+      VCM_REAL_IP_HEADERS: "x-forwarded-for"
+
+  traefik:
+    image: traefik:v3.1
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+      - "--certificatesresolvers.le.acme.email=admin@example.com"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+    ports: ["80:80", "443:443"]
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "traefik-le:/letsencrypt"
+
+volumes:
+  traefik-le:

@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>My profile</h1>
+
+<div class="card">
+  <p><strong>Username:</strong> {{ user.username }}</p>
+  <p><strong>Role:</strong> {{ user.role.value }}</p>
+  <p><strong>MFA:</strong>
+    TOTP {{ 'enrolled' if user.totp_confirmed else 'not set' }},
+    {{ passkeys|length }} passkey(s)</p>
+</div>
+
+<div class="card">
+  <h3>Change password</h3>
+  <form method="post" action="/profile/password">
+    <label>Current password</label><input type="password" name="current" autocomplete="current-password">
+    <div class="row">
+      <div><label>New password</label><input type="password" name="new" autocomplete="new-password"></div>
+      <div><label>Confirm new</label><input type="password" name="confirm" autocomplete="new-password"></div>
+    </div>
+    <button class="btn" style="margin-top:.6rem">Update password</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Multi-factor authentication</h3>
+  <h4>TOTP</h4>
+  {% if user.totp_confirmed %}
+    <p class="muted">Authenticator app enrolled.</p>
+    <form method="post" action="/profile/totp/reset"
+          onsubmit="return confirm('Remove TOTP? You must keep at least one MFA factor.');">
+      <button class="btn small danger">Remove TOTP</button></form>
+  {% else %}
+    <a class="btn small" href="/mfa/enroll">Set up TOTP</a>
+  {% endif %}
+
+  <h4 style="margin-top:1rem;">Passkeys</h4>
+  <table>
+    <tr><th>Name</th><th>Added</th><th></th></tr>
+    {% for k in passkeys %}
+    <tr>
+      <td>
+        <form method="post" action="/profile/passkey/{{ k.id }}/rename" style="display:flex;gap:.3rem">
+          <input name="name" value="{{ k.name }}" style="width:auto">
+          <button class="btn small">Rename</button>
+        </form>
+      </td>
+      <td class="muted">{{ k.created_at.strftime('%Y-%m-%d') }}</td>
+      <td>
+        <form method="post" action="/profile/passkey/{{ k.id }}/delete"
+              onsubmit="return confirm('Delete passkey {{ k.name }}?');">
+          <button class="btn small danger">Delete</button></form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <button class="btn small" style="margin-top:.5rem" onclick="registerPasskey()">🔑 Add passkey</button>
+</div>
+
+<div class="card">
+  <h3>Active sessions</h3>
+  <table>
+    <tr><th>Started</th><th>Expires</th><th>IP</th><th>MFA</th><th></th></tr>
+    {% for s in sessions %}
+    <tr>
+      <td class="muted">{{ s.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td class="muted">{{ s.expires_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>{{ s.ip or '—' }}</td>
+      <td>{{ 'yes' if s.mfa_ok else 'no' }}</td>
+      <td>{% if s.id == current_sid %}<span class="badge">this session</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <form method="post" action="/profile/sessions/revoke-others" style="margin-top:.5rem">
+    <button class="btn small">Sign out all other sessions</button>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/webauthn.js"></script>{% endblock %}

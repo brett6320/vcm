@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% macro ca_node(n) %}
+<li>
+  <div class="tree-ca">
+    <span class="badge badge-{{ n.ca_type }}">{{ n.ca_type }}</span>
+    <strong>{{ n.name }}</strong>
+    <span class="muted">{{ n.subject }}</span>
+    <span class="muted">· {{ n.key }}{% if n.path_len is not none %} · pathlen:{{ n.path_len }}{% endif %}
+      · exp {{ n.not_after[:10] }}</span>
+    <a class="tree-link" href="/pki/ca/{{ n.id }}/cert">cert</a>
+    <a class="tree-link" href="/pki/ca/{{ n.id }}/chain">chain</a>
+  </div>
+  {% if n.cas or n.certificates %}
+  <ul>
+    {% for child in n.cas %}{{ ca_node(child) }}{% endfor %}
+    {% for c in n.certificates %}
+    <li class="tree-leaf">
+      🖊 <a href="/pki/cert/{{ c.id }}">{{ c.subject }}</a>
+      <span class="muted">· {{ c.serial }} · {{ c.status }} · exp {{ c.not_after[:10] }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</li>
+{% endmacro %}
+
+{% block content %}
+<h1>PKI</h1>
+
+<div class="card">
+  <div style="display:flex;align-items:baseline;gap:1rem;">
+    <h3 style="margin-right:auto;">Certificate hierarchy</h3>
+    <a class="btn small" href="/pki/tree.json">JSON</a>
+    <a class="btn small" href="/pki/tree.json?include_pem=true">JSON + PEM</a>
+  </div>
+  {% if hierarchy %}
+  <ul class="pki-tree">
+    {% for root in hierarchy %}{{ ca_node(root) }}{% endfor %}
+  </ul>
+  <p class="muted">Public certificates only — CA private keys are never included.</p>
+  {% else %}
+  <p class="muted">No CAs yet. Create a root CA below.</p>
+  {% endif %}
+</div>
+
+{% if user.role.value == 'admin' %}
+<div class="card">
+  <h3>Create CA</h3>
+  <form method="post" action="/pki/ca">
+    <div class="row">
+      <div><label>Name</label><input name="name" required></div>
+      <div><label>Common Name (CN)</label><input name="cn" required></div>
+    </div>
+    <div class="row3">
+      <div><label>Organization (O)</label><input name="org"></div>
+      <div><label>Country (C)</label><input name="country" maxlength="2"></div>
+      <div><label>Type</label>
+        <select name="ca_type">{% for t in ca_types %}<option value="{{ t.value }}">{{ t.value }}</option>{% endfor %}</select>
+      </div>
+    </div>
+    <div class="row3">
+      <div><label>Parent CA (blank = root)</label>
+        <select name="parent_id"><option value="">— none (root) —</option>
+        {% for c in cas %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
+      </div>
+      <div><label>Key type</label><select name="key_type">
+        <option value="ec">EC</option><option value="rsa">RSA</option></select></div>
+      <div><label>Key params (curve/bits)</label><input name="key_params" value="secp384r1"></div>
+    </div>
+    <label>Valid days</label><input name="valid_days" value="3650">
+    <button class="btn" style="margin-top:.8rem">Create CA</button>
+  </form>
+  <p class="muted">CA private keys are AES-256-GCM encrypted at rest and never exported.</p>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3>Sign appliance CSR</h3>
+  <form method="post" action="/pki/sign">
+    <label>Issuing CA</label>
+    <select name="issuing_ca_id" required>
+      {% for c in cas if c.ca_type.value != 'root' %}
+      <option value="{{ c.id }}">{{ c.name }} ({{ c.ca_type.value }})</option>{% endfor %}
+    </select>
+    <label>CSR (PEM)</label>
+    <textarea name="csr_pem" placeholder="-----BEGIN CERTIFICATE REQUEST-----"></textarea>
+    <div class="row">
+      <div><label>SAN DNS (comma-separated)</label><input name="san_dns"></div>
+      <div><label>Valid days</label><input name="valid_days" value="825"></div>
+    </div>
+    <button class="btn" style="margin-top:.8rem">Sign CSR</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Recent certificates</h3>
+  <table>
+    <tr><th>Serial</th><th>Subject</th><th>Status</th><th>Expires</th><th></th></tr>
+    {% for c in certs %}
+    <tr><td>{{ c.serial }}</td><td class="muted">{{ c.subject_dn }}</td>
+        <td>{{ c.status.value }}</td><td>{{ c.not_after.date() }}</td>
+        <td><a href="/pki/cert/{{ c.id }}">view</a></td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% from "_macros.html" import rated_select %}
+{% block content %}
+<h1>VPN Defaults</h1>
+<p class="muted">Applied to every new site (overridable per site). Algorithm ratings from the catalog below.</p>
+<div class="card">
+  <form method="post" action="/admin/defaults">
+    <h3>Phase 1 (IKE)</h3>
+    <div class="row3">
+      <div><label>IKE version</label>{{ rated_select('p1_ver', opts.ike_versions, defaults.phase1.ike_version) }}</div>
+      <div><label>Auth method</label>{{ rated_select('p1_auth', opts.auth_methods, defaults.phase1.auth_method) }}</div>
+      <div><label>Lifetime (s)</label><input name="p1_life" value="{{ defaults.phase1.lifetime_seconds }}"></div>
+    </div>
+    <div class="row3">
+      <div><label>Encryption</label>{{ rated_select('p1_enc', opts.encryption, defaults.phase1.encryption) }}</div>
+      <div><label>Integrity</label>{{ rated_select('p1_integ', opts.integrity, defaults.phase1.integrity) }}</div>
+      <div><label>DH group</label>{{ rated_select('p1_dh', opts.dh_groups, defaults.phase1.dh_group) }}</div>
+    </div>
+    <h3>Phase 2 (IPSec)</h3>
+    <div class="row3">
+      <div><label>Encryption</label>{{ rated_select('p2_enc', opts.encryption, defaults.phase2.encryption) }}</div>
+      <div><label>Integrity</label>{{ rated_select('p2_integ', opts.integrity, defaults.phase2.integrity) }}</div>
+      <div><label>PFS group</label>{{ rated_select('p2_pfs', opts.dh_groups, defaults.phase2.pfs_group) }}</div>
+    </div>
+    <label>Lifetime (s)</label><input name="p2_life" value="{{ defaults.phase2.lifetime_seconds }}">
+    <button class="btn" style="margin-top:.8rem">Save defaults</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Algorithm catalog</h3>
+  {% for group, items in catalog.items() %}
+    {% if items is mapping %}
+    <h4>{{ group }}</h4>
+    <table><tr><th>Value</th><th>Rating</th><th>Note</th></tr>
+    {% for k, v in items.items() %}
+      <tr><td>{{ k }}</td>
+        <td class="{{ 'sev-weak' if v.security in ['weak','broken'] else '' }}">{{ v.security if v is mapping else v }}</td>
+        <td class="muted">{{ v.note if v is mapping else '' }}</td></tr>
+    {% endfor %}</table>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endblock %}

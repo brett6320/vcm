@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Dashboard</h1>
+<div class="grid">
+  <div class="card stat"><div class="num">{{ stats.cas }}</div>Certificate Authorities</div>
+  <div class="card stat"><div class="num">{{ stats.certs }}</div>Issued Certificates</div>
+  <div class="card stat"><div class="num">{{ stats.sites }}</div>VPN Sites</div>
+</div>
+<div class="card">
+  <h3>Quick actions</h3>
+  <a class="btn" href="/pki">Manage PKI</a>
+  <a class="btn" href="/sites">Generate VPN config</a>
+  <a class="btn" href="/sites/import">Import existing config</a>
+</div>
+<div class="card">
+  <h3>Recent sites</h3>
+  <table>
+    <tr><th>Name</th><th>Vendor</th><th>Source</th></tr>
+    {% for s in recent_sites %}
+    <tr><td><a href="/sites/{{ s.id }}">{{ s.name }}</a></td>
+        <td>{{ s.vendor.value }}</td><td>{{ s.source }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

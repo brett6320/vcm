@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+app/config.py
+app/db.py
+app/main.py
+app/models.py
+app/templates_env.py
+tests/test_core.py
+vcm.egg-info/PKG-INFO
+vcm.egg-info/SOURCES.txt
+vcm.egg-info/dependency_links.txt
+vcm.egg-info/requires.txt
+vcm.egg-info/top_level.txt

@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:420px;margin:3rem auto;">
+  <h2>Multi-factor authentication</h2>
+  {% if has_passkey %}
+  <button class="btn" style="width:100%" onclick="authPasskey()">🔑 Use passkey</button>
+  <hr>
+  {% endif %}
+  {% if has_totp %}
+  <form method="post" action="/mfa/totp">
+    <label>Authenticator code (TOTP)</label>
+    <input name="code" inputmode="numeric" autocomplete="one-time-code" autofocus>
+    <button class="btn" style="margin-top:.8rem;width:100%">Verify</button>
+  </form>
+  {% endif %}
+  {% if not has_totp and not has_passkey %}
+  <p>No MFA enrolled. <a href="/mfa/enroll">Enroll now</a>.</p>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/webauthn.js"></script>{% endblock %}

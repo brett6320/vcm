@@ -1,0 +1,71 @@
+:root {
+  --bg: #ffffff; --fg: #1a1a1a; --muted: #666; --card: #f6f7f9; --border: #d9dde3;
+  --accent: #2b6cb0; --accent-fg: #fff; --danger: #c0392b; --warn: #b7791f;
+  --ok: #2f855a; --code-bg: #f0f2f5;
+}
+:root[data-theme="dark"] {
+  --bg: #14171c; --fg: #e6e8eb; --muted: #9aa4b0; --card: #1e232b; --border: #2c333d;
+  --accent: #4c9be8; --accent-fg: #0b0e12; --danger: #e57373; --warn: #e0b055;
+  --ok: #68d391; --code-bg: #0f1319;
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --bg: #14171c; --fg: #e6e8eb; --muted: #9aa4b0; --card: #1e232b; --border: #2c333d;
+    --accent: #4c9be8; --accent-fg: #0b0e12; --danger: #e57373; --warn: #e0b055;
+    --ok: #68d391; --code-bg: #0f1319;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+.topbar { display: flex; align-items: center; gap: 1rem; padding: .6rem 1rem;
+  background: var(--card); border-bottom: 1px solid var(--border); }
+.brand { font-weight: 700; text-decoration: none; color: var(--fg); font-size: 1.1rem; }
+nav a { margin-right: .8rem; text-decoration: none; color: var(--accent); }
+.right { margin-left: auto; display: flex; align-items: center; gap: .8rem; }
+.who { color: var(--muted); font-size: .85rem; }
+main { max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; }
+h1, h2, h3 { line-height: 1.2; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 1rem 1.2rem; margin-bottom: 1.2rem; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
+.stat { text-align: center; } .stat .num { font-size: 2rem; font-weight: 700; }
+label { display: block; margin: .5rem 0 .2rem; font-size: .85rem; color: var(--muted); }
+input, select, textarea { width: 100%; padding: .5rem; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+textarea { min-height: 120px; font-family: ui-monospace, monospace; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+.row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .8rem; }
+.btn { display: inline-block; background: var(--accent); color: var(--accent-fg);
+  border: none; padding: .55rem 1rem; border-radius: 6px; cursor: pointer;
+  text-decoration: none; font: inherit; }
+.btn.small { padding: .3rem .6rem; font-size: .8rem; }
+.btn.danger { background: var(--danger); }
+.theme-picker select { width: auto; padding: .3rem; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--border);
+  font-size: .9rem; }
+pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow: auto;
+  border: 1px solid var(--border); }
+.alert { padding: .7rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
+.alert.error { background: color-mix(in srgb, var(--danger) 18%, transparent);
+  border: 1px solid var(--danger); }
+.alert.notice { background: color-mix(in srgb, var(--ok) 18%, transparent);
+  border: 1px solid var(--ok); }
+.badge { padding: .1rem .5rem; border-radius: 10px; font-size: .75rem; }
+.sev-broken, .sev-weak { color: var(--danger); font-weight: 600; }
+.sev-unknown { color: var(--warn); }
+.warn-box { border-left: 4px solid var(--warn); padding: .5rem 1rem;
+  background: color-mix(in srgb, var(--warn) 12%, transparent); margin: .8rem 0; }
+.muted { color: var(--muted); font-size: .85rem; }
+.pki-tree, .pki-tree ul { list-style: none; margin: 0; padding-left: 1.2rem; }
+.pki-tree > li { padding-left: 0; }
+.pki-tree li { position: relative; padding: .25rem 0; }
+.pki-tree ul { border-left: 1px solid var(--border); margin-left: .4rem; }
+.tree-ca { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; }
+.tree-leaf { font-size: .9rem; }
+.tree-link { font-size: .75rem; margin-left: .3rem; }
+.badge-root { background: var(--danger); color: #fff; }
+.badge-intermediate { background: var(--warn); color: #111; }
+.badge-issuing { background: var(--ok); color: #05210f; }
+.badge-root, .badge-intermediate, .badge-issuing {
+  padding: .05rem .5rem; border-radius: 10px; font-size: .7rem; text-transform: uppercase; }

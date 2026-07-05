@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Import existing config</h1>
+<div class="card">
+  <p class="muted">Paste an existing SRX / Digi / Cradlepoint VPN config. Vendor and crypto
+    params are auto-detected to seed the site DB, enabling compatible peer generation.</p>
+  <form method="post" action="/sites/import">
+    <label>Site name (optional — inferred if blank)</label><input name="name">
+    <label>Configuration text</label>
+    <textarea name="config_text" style="min-height:280px" required></textarea>
+    <button class="btn" style="margin-top:.8rem">Import</button>
+  </form>
+</div>
+{% endblock %}

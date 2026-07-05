@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:480px;margin:2rem auto;">
+  <h2>Enroll MFA</h2>
+  <p class="muted">At least one factor is required before using the app.</p>
+
+  <h3>Option A — Authenticator app (TOTP)</h3>
+  {% if qr %}<img src="{{ qr }}" alt="TOTP QR" style="max-width:200px">{% endif %}
+  <p class="muted">Secret: <code>{{ secret }}</code></p>
+  <form method="post" action="/mfa/enroll/totp">
+    <label>Enter code to confirm</label>
+    <input name="code" inputmode="numeric" autocomplete="one-time-code">
+    <button class="btn" style="margin-top:.6rem">Confirm TOTP</button>
+  </form>
+
+  <hr>
+  <h3>Option B — Passkey (WebAuthn)</h3>
+  <button class="btn" onclick="registerPasskey()">🔑 Register passkey</button>
+  {% if has_passkey %}<p class="muted">You already have a passkey registered.</p>{% endif %}
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/webauthn.js"></script>{% endblock %}

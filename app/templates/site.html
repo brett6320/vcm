@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ site.name }} <span class="muted">({{ site.vendor.value }})</span></h1>
+{% if imported %}<div class="alert notice">Imported and stored. You can now generate a compatible peer.</div>{% endif %}
+
+{% if warnings %}
+<div class="warn-box">
+  <strong>⚠ Security warnings ({{ warnings|length }})</strong>
+  <ul>{% for w in warnings %}
+    <li class="sev-{{ w.severity }}">[{{ w.severity|upper }}] {{ w.message }}</li>
+  {% endfor %}</ul>
+</div>
+{% else %}
+<div class="alert notice">All negotiated algorithms rated strong. ✅</div>
+{% endif %}
+
+<div class="card">
+  <h3>Parameters</h3>
+  <div class="row">
+    <div><strong>Phase 1:</strong> {{ profile.phase1.ike_version }} / {{ profile.phase1.encryption }} /
+      {{ profile.phase1.integrity }} / DH{{ profile.phase1.dh_group }} / {{ profile.phase1.auth_method }}</div>
+    <div><strong>Phase 2:</strong> {{ profile.phase2.encryption }} / {{ profile.phase2.integrity }} /
+      PFS{{ profile.phase2.pfs_group }}</div>
+  </div>
+  <p class="muted">Remote GW: {{ profile.remote.public_ip or '—' }} · Local subnets:
+    {{ profile.local.protected_subnets|join(', ') or '—' }} · Remote subnets:
+    {{ profile.remote.protected_subnets|join(', ') or '—' }}</p>
+</div>
+
+<div class="card">
+  <h3>Generated configuration</h3>
+  <a class="btn small" href="/sites/{{ site.id }}/config">Download</a>
+  <pre>{{ site.generated_config }}</pre>
+</div>
+
+<div class="card">
+  <h3>Compatible peer (far-end)</h3>
+  {% if peer %}
+    <p>Peer config: <a href="/sites/{{ peer.id }}">{{ peer.name }}</a> — mirrored crypto guarantees interop.</p>
+  {% else %}
+    <p class="muted">Crypto is mirrored automatically (guaranteed interop). Enter the
+      far-end's endpoint details below.</p>
+    <form method="post" action="/sites/{{ site.id }}/peer">
+      <div class="row3">
+        <div><label>Peer name</label><input name="peer_name" value="{{ site.name }}-peer"></div>
+        <div><label>Endpoint type (vendor)</label>
+          <select name="peer_vendor">
+            {% for v in vendors %}
+            <option value="{{ v.value }}" {% if v.value == peer_suggest.vendor %}selected{% endif %}>{{ v.value }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div><label>Model</label><input name="peer_model" placeholder="SRX300 / IX20 / …"></div>
+      </div>
+      <div class="row">
+        <div><label>Far-end public IP</label>
+          <input name="peer_public_ip" value="{{ peer_suggest.local.public_ip }}"
+                 placeholder="peer gateway address"></div>
+        <div><label>Far-end IKE ID <span class="muted">(blank = auto)</span></label>
+          <input name="peer_ike_id" value="{{ peer_suggest.local.id }}"></div>
+      </div>
+      <button class="btn" style="margin-top:.6rem">Generate compatible far-end config</button>
+    </form>
+  {% endif %}
+</div>
+
+{% if user and user.role.value == 'admin' %}
+<div class="card">
+  <h3>Danger zone</h3>
+  <form method="post" action="/sites/{{ site.id }}/delete"
+        onsubmit="return confirm('Delete site {{ site.name }}? This cannot be undone.');">
+    <button class="btn danger">Delete this site</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Audit log</h1>
+<div class="card">
+  <table>
+    <tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th></tr>
+    {% for r in rows %}
+    <tr><td class="muted">{{ r.ts.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td>{{ r.username or '—' }}</td><td>{{ r.action }}</td>
+        <td class="muted">{{ r.detail or '' }}</td><td>{{ r.ip or '' }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

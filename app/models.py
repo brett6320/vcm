@@ -1,0 +1,224 @@
+from __future__ import annotations
+
+import enum
+from datetime import datetime, timezone
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum as SAEnum,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from .db import Base
+
+
+def _enum_col(enum_cls):
+    # Store the enum *value* (not name) as a VARCHAR; round-trips back to the enum
+    # on read so `.value` works everywhere in templates/logic.
+    return SAEnum(enum_cls, native_enum=False, length=24,
+                  values_callable=lambda e: [m.value for m in e])
+
+
+def utcnow() -> datetime:
+    # Naive UTC: SQLite does not persist tzinfo, so keeping everything naive-UTC
+    # avoids offset-naive/offset-aware comparison errors across the codebase.
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class Role(str, enum.Enum):
+    operator = "operator"
+    admin = "admin"
+
+
+class CAType(str, enum.Enum):
+    root = "root"
+    intermediate = "intermediate"
+    issuing = "issuing"
+
+
+class CertStatus(str, enum.Enum):
+    active = "active"
+    revoked = "revoked"
+    expired = "expired"
+
+
+class Vendor(str, enum.Enum):
+    juniper_srx = "juniper_srx"
+    digi = "digi"
+    cradlepoint = "cradlepoint"
+    pfsense = "pfsense"
+
+
+# --------------------------------------------------------------------------- #
+# Identity & access
+# --------------------------------------------------------------------------- #
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[Role] = mapped_column(_enum_col(Role), default=Role.operator)
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # TOTP secret, AES-GCM encrypted at rest (nonce||ct). Nullable until enrolled.
+    totp_secret_enc: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    totp_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    credentials: Mapped[list["WebAuthnCredential"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+    @property
+    def has_mfa(self) -> bool:
+        return self.totp_confirmed or any(c for c in self.credentials)
+
+
+class WebAuthnCredential(Base):
+    __tablename__ = "webauthn_credentials"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(64), default="passkey")
+    credential_id: Mapped[bytes] = mapped_column(LargeBinary, unique=True, index=True)
+    public_key: Mapped[bytes] = mapped_column(LargeBinary)
+    sign_count: Mapped[int] = mapped_column(Integer, default=0)
+    transports: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped[User] = relationship(back_populates="credentials")
+
+
+class WebAuthnChallenge(Base):
+    """Short-lived registration/authentication challenges."""
+
+    __tablename__ = "webauthn_challenges"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    kind: Mapped[str] = mapped_column(String(16))  # "register" | "auth"
+    challenge: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UserSession(Base):
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # random token
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    mfa_ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    user: Mapped[User] = relationship()
+
+
+class IPAllowEntry(Base):
+    __tablename__ = "ip_allowlist"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cidr: Mapped[str] = mapped_column(String(64))  # e.g. 203.0.113.0/24 or 2001:db8::/32
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# --------------------------------------------------------------------------- #
+# PKI
+# --------------------------------------------------------------------------- #
+class CertAuthority(Base):
+    __tablename__ = "cert_authorities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True)
+    ca_type: Mapped[CAType] = mapped_column(_enum_col(CAType))
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("cert_authorities.id"), nullable=True
+    )
+    subject_dn: Mapped[str] = mapped_column(String(512))
+    cert_pem: Mapped[str] = mapped_column(Text)
+    # Private key wrapped with KEK (AES-256-GCM: nonce||ciphertext). Never exported.
+    key_enc: Mapped[bytes] = mapped_column(LargeBinary)
+    key_type: Mapped[str] = mapped_column(String(16))  # ec|rsa
+    key_params: Mapped[str] = mapped_column(String(32))  # curve name or bit size
+    serial_counter: Mapped[int] = mapped_column(Integer, default=1)
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    path_len: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    parent: Mapped["CertAuthority | None"] = relationship(remote_side=[id])
+
+
+class Certificate(Base):
+    __tablename__ = "certificates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ca_id: Mapped[int] = mapped_column(ForeignKey("cert_authorities.id"))
+    site_id: Mapped[int | None] = mapped_column(ForeignKey("sites.id"), nullable=True)
+    serial: Mapped[str] = mapped_column(String(64), index=True)
+    subject_dn: Mapped[str] = mapped_column(String(512))
+    san: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    cert_pem: Mapped[str] = mapped_column(Text)
+    csr_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[CertStatus] = mapped_column(_enum_col(CertStatus), default=CertStatus.active)
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    ca: Mapped[CertAuthority] = relationship()
+
+
+# --------------------------------------------------------------------------- #
+# VPN sites & defaults
+# --------------------------------------------------------------------------- #
+class Defaults(Base):
+    """Singleton-ish key/value store for app-wide VPN/PKI defaults (JSON blob)."""
+
+    __tablename__ = "defaults"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), unique=True)
+    value_json: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class Site(Base):
+    """A VPN endpoint / firewall we have generated or imported config for."""
+
+    __tablename__ = "sites"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    vendor: Mapped[Vendor] = mapped_column(_enum_col(Vendor))
+    model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Full parameter set as JSON (endpoints, proposals, subnets, PKI refs, etc.)
+    params_json: Mapped[str] = mapped_column(Text)
+    generated_config: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(16), default="generated")  # generated|imported
+    peer_site_id: Mapped[int | None] = mapped_column(ForeignKey("sites.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+    __table_args__ = (UniqueConstraint("id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    username: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    action: Mapped[str] = mapped_column(String(64))
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)

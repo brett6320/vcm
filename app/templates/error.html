@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}{{ status }} — {{ app_name }}{% endblock %}
+{% block content %}
+<div class="card" style="max-width:520px;margin:3rem auto;text-align:center;">
+  <h1 style="font-size:3rem;margin:.2rem 0;">{{ status }}</h1>
+  <p class="muted">{{ detail }}</p>
+  <p style="margin-top:1.5rem;">
+    <a class="btn" href="/">Dashboard</a>
+    <a class="btn" href="/login">Login</a>
+  </p>
+</div>
+{% endblock %}

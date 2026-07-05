@@ -1,0 +1,46 @@
+# Base app. See deploy/ for reverse-proxy overlays (Traefik / NGINX / Cloudflare).
+services:
+  vcm:
+    build: .
+    image: vcm:latest
+    restart: unless-stopped
+    environment:
+      # --- REQUIRED in production ---
+      VCM_SECRET_KEY: "${VCM_SECRET_KEY:?set a long random value}"
+      VCM_KEK_B64: "${VCM_KEK_B64:?base64 of 32 random bytes; wraps CA keys}"
+      # First-run admin (remove after first login enrolls MFA):
+      VCM_BOOTSTRAP_ADMIN: "${VCM_BOOTSTRAP_ADMIN:-admin:changeme}"
+      # --- Reverse proxy / real client IP ---
+      # Trust forwarded IP only from the proxy network. Adjust to your setup.
+      VCM_TRUSTED_PROXIES: "${VCM_TRUSTED_PROXIES:-172.16.0.0/12,127.0.0.1/32}"
+      VCM_REAL_IP_HEADERS: "${VCM_REAL_IP_HEADERS:-cf-connecting-ip,x-forwarded-for,x-real-ip}"
+      VCM_ENFORCE_IP_ALLOWLIST: "${VCM_ENFORCE_IP_ALLOWLIST:-true}"
+      # Seed the allowlist on first run so proxy deploys aren't locked out
+      # (client IP is the real client, never loopback, behind a proxy).
+      # Default: all RFC1918 + loopback. Tighten to your admin CIDR in prod.
+      VCM_INITIAL_ALLOW: "${VCM_INITIAL_ALLOW:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128}"
+      # --- WebAuthn (must match the public origin) ---
+      VCM_RP_ID: "${VCM_RP_ID:-localhost}"
+      VCM_RP_ORIGIN: "${VCM_RP_ORIGIN:-http://localhost:8000}"
+      VCM_RP_NAME: "VCM"
+      VCM_COOKIE_SECURE: "${VCM_COOKIE_SECURE:-false}"
+      # --- Data store (default SQLite on a volume; swap for Postgres) ---
+      VCM_DATABASE_URL: "${VCM_DATABASE_URL:-sqlite:////data/vcm.db}"
+    volumes:
+      - vcm-data:/data
+    # No published ports by default — front it with a reverse proxy (see deploy/).
+    # For local testing without a proxy, uncomment:
+    ports: ["8000:8000"]
+
+  # Uncomment for Postgres:
+  # db:
+  #   image: postgres:16
+  #   environment:
+  #     POSTGRES_DB: vcm
+  #     POSTGRES_USER: vcm
+  #     POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+  #   volumes: ["pg-data:/var/lib/postgresql/data"]
+
+volumes:
+  vcm-data:
+  # pg-data:

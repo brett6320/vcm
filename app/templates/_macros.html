@@ -1,0 +1,10 @@
+{% macro rated_select(name, opts, selected) %}
+<select name="{{ name }}">
+  {% for o in opts %}
+  <option value="{{ o.value }}" data-sec="{{ o.security }}"
+    {% if o.value == selected %}selected{% endif %}>
+    {{ o.value }} — {{ o.security }}{% if o.note %} · {{ o.note }}{% endif %}
+  </option>
+  {% endfor %}
+</select>
+{% endmacro %}

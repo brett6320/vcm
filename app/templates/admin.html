@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Admin</h1>
+
+<div class="card">
+  <h3>Users</h3>
+  <table>
+    <tr><th>ID</th><th>User</th><th>Role</th><th>MFA</th><th>Status</th><th></th></tr>
+    {% for u in users %}
+    <tr><td>{{ u.id }}</td><td><a href="/admin/users/{{ u.id }}">{{ u.username }}</a></td>
+      <td>{{ u.role.value }}</td>
+      <td>{{ 'yes' if u.has_mfa else 'no' }}</td>
+      <td>{{ 'disabled' if u.disabled else 'active' }}</td>
+      <td>
+        <form method="post" action="/admin/users/{{ u.id }}/toggle" style="display:inline">
+          <button class="btn small">{{ 'Enable' if u.disabled else 'Disable' }}</button></form>
+        <a class="btn small" href="/admin/users/{{ u.id }}">Manage</a>
+      </td></tr>
+    {% endfor %}
+  </table>
+  <h4>Add user</h4>
+  <form method="post" action="/admin/users">
+    <div class="row3">
+      <div><label>Username</label><input name="username" required></div>
+      <div><label>Password</label><input type="password" name="password" required></div>
+      <div><label>Role</label><select name="role">
+        {% for r in roles %}<option value="{{ r.value }}">{{ r.value }}</option>{% endfor %}</select></div>
+    </div>
+    <button class="btn" style="margin-top:.6rem">Create</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Source-IP allowlist</h3>
+  <p class="muted">Requests from outside these CIDRs are rejected (403). Proxy-forwarded IPs
+    are trusted only from configured trusted proxies. Empty list = loopback only.</p>
+  <table>
+    <tr><th>CIDR</th><th>Description</th><th></th></tr>
+    {% for e in ips %}
+    <tr><td>{{ e.cidr }}</td><td>{{ e.description or '' }}</td>
+      <td><form method="post" action="/admin/ip/{{ e.id }}/delete">
+        <button class="btn small danger">Delete</button></form></td></tr>
+    {% endfor %}
+  </table>
+  <form method="post" action="/admin/ip">
+    <div class="row">
+      <div><label>CIDR</label><input name="cidr" placeholder="203.0.113.0/24" required></div>
+      <div><label>Description</label><input name="description"></div>
+    </div>
+    <button class="btn" style="margin-top:.6rem">Add</button>
+  </form>
+</div>
+{% endblock %}

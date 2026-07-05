@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="system">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script>
+    // Apply theme ASAP to avoid flash. Default: follow system.
+    (function () {
+      var t = localStorage.getItem('vcm-theme') || 'system';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">🔐 VCM</a>
+  {% if user %}
+  <nav>
+    <a href="/">Dashboard</a>
+    <a href="/pki">PKI</a>
+    <a href="/sites">Sites</a>
+    {% if user.role.value == 'admin' %}
+      <a href="/admin">Admin</a>
+      <a href="/admin/defaults">Defaults</a>
+      <a href="/admin/audit">Audit</a>
+    {% endif %}
+  </nav>
+  {% endif %}
+  <div class="right">
+    <label class="theme-picker" title="Theme">
+      <select id="theme-select">
+        <option value="system">🖥 System</option>
+        <option value="light">☀ Light</option>
+        <option value="dark">🌙 Dark</option>
+      </select>
+    </label>
+    {% if user %}<a class="who" href="/profile">{{ user.username }} ({{ user.role.value }})</a>
+    <a href="/logout" class="btn small">Logout</a>{% endif %}
+  </div>
+</header>
+<main>
+  {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+  {% if notice %}<div class="alert notice">{{ notice }}</div>{% endif %}
+  {% block content %}{% endblock %}
+</main>
+<script src="/static/theme.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

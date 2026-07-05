@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Certificate {{ cert.serial }}</h1>
+<div class="card">
+  <p><strong>Subject:</strong> {{ cert.subject_dn }}</p>
+  <p><strong>SAN:</strong> {{ cert.san or '—' }}</p>
+  <p><strong>Status:</strong> {{ cert.status.value }} &nbsp;
+     <strong>Valid:</strong> {{ cert.not_before.date() }} → {{ cert.not_after.date() }}</p>
+  <a class="btn small" href="/pki/cert/{{ cert.id }}/pem?fmt=cert">Download cert</a>
+  <a class="btn small" href="/pki/cert/{{ cert.id }}/pem?fmt=fullchain">Download full chain</a>
+</div>
+<div class="card"><h3>Full chain (PEM)</h3><pre>{{ fullchain }}</pre></div>
+{% endblock %}

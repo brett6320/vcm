@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width:400px;margin:3rem auto;">
+  <h2>Sign in</h2>
+  <form method="post" action="/login">
+    <label>Username</label>
+    <input name="username" autofocus autocomplete="username">
+    <label>Password</label>
+    <input type="password" name="password" autocomplete="current-password">
+    <button class="btn" style="margin-top:1rem;width:100%">Continue</button>
+  </form>
+  <p class="muted">MFA required after password.</p>
+</div>
+{% endblock %}

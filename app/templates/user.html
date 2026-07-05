@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/admin">← Users</a></p>
+<h1>Manage user: {{ u.username }}</h1>
+
+<div class="card">
+  <p><strong>ID:</strong> {{ u.id }} · <strong>Status:</strong>
+    {{ 'disabled' if u.disabled else 'active' }} ·
+    <strong>MFA:</strong> TOTP {{ 'yes' if u.totp_confirmed else 'no' }},
+    {{ u.credentials|length }} passkey(s)</p>
+  {% if is_self %}<p class="muted">This is your own account.</p>{% endif %}
+</div>
+
+<div class="card">
+  <h3>Role</h3>
+  <form method="post" action="/admin/users/{{ u.id }}/role" style="display:flex;gap:.5rem;align-items:end">
+    <div style="flex:1"><label>Role</label>
+      <select name="role">
+        {% for r in roles %}
+        <option value="{{ r.value }}" {% if r == u.role %}selected{% endif %}>{{ r.value }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button class="btn">Update role</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Reset password</h3>
+  <form method="post" action="/admin/users/{{ u.id }}/password">
+    <label>New password</label><input type="password" name="password" autocomplete="new-password">
+    <button class="btn" style="margin-top:.5rem">Set password</button>
+  </form>
+  <p class="muted">The user should change it after next login.</p>
+</div>
+
+<div class="card">
+  <h3>MFA</h3>
+  <form method="post" action="/admin/users/{{ u.id }}/reset-mfa"
+        onsubmit="return confirm('Reset all MFA factors for {{ u.username }}? They must re-enroll.');">
+    <button class="btn danger">Reset MFA (TOTP + passkeys)</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Account</h3>
+  <form method="post" action="/admin/users/{{ u.id }}/toggle" style="display:inline">
+    <button class="btn">{{ 'Enable account' if u.disabled else 'Disable account' }}</button>
+  </form>
+  {% if not is_self %}
+  <form method="post" action="/admin/users/{{ u.id }}/delete" style="display:inline"
+        onsubmit="return confirm('Delete {{ u.username }}? This cannot be undone.');">
+    <button class="btn danger">Delete user</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}
