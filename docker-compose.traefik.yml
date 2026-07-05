@@ -12,12 +12,13 @@
 #   TRAEFIK_CERTRESOLVER=letsencrypt-prd
 services:
   vcm:
-    networks:
-      default: {}
+    # Use the Traefik network IN PLACE OF the default bridge (!override drops the
+    # base `default`). Postgres, if later in COMPOSE_FILE, still adds its backend net.
+    networks: !override
       traefik:
         # Optional static IP on the Traefik network. If VCM_TRAEFIK_IPV4 is unset,
         # the value is empty and Compose omits it → Docker auto-assigns an IP.
-        ipv4_address: ${VCM_TRAEFIK_IPV4:-}
+        ipv4_address: "${VCM_TRAEFIK_IPV4:-}"
     labels:
       - traefik.enable=true
       - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}

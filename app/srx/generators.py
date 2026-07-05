@@ -224,6 +224,154 @@ def gen_pfsense(p: VpnProfile) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Fortinet (FortiOS CLI)
+# --------------------------------------------------------------------------- #
+def gen_fortinet(p: VpnProfile) -> str:
+    v = "fortinet"
+    n = p.name[:31]  # FortiOS name length limit
+    enc1 = vendor_kw(ENCRYPTION, p.phase1.encryption, v)
+    h1 = vendor_kw(INTEGRITY, p.phase1.integrity, v)
+    enc2 = vendor_kw(ENCRYPTION, p.phase2.encryption, v)
+    h2 = vendor_kw(INTEGRITY, p.phase2.integrity, v)
+    prop1 = enc1 if "gcm" in enc1 else f"{enc1}-{h1}"
+    prop2 = enc2 if "gcm" in enc2 else f"{enc2}-{h2}"
+    dh1 = vendor_kw(DH_GROUPS, p.phase1.dh_group, v)
+    pfs = vendor_kw(DH_GROUPS, p.phase2.pfs_group, v)
+    cert = p.phase1.auth_method == "certificate"
+
+    lines = [f"# ---- FortiGate IPsec VPN: {n} ----",
+             "config vpn ipsec phase1-interface",
+             f'    edit "{n}"',
+             '        set type static',
+             '        set interface "wan1"',
+             f"        set ike-version {'2' if p.phase1.ike_version == 'ikev2' else '1'}",
+             f"        set remote-gw {p.remote.public_ip}",
+             f"        set proposal {prop1}",
+             f"        set dhgrp {dh1}",
+             f"        set keylife {p.phase1.lifetime_seconds}"]
+    if cert:
+        lines += ["        set authmethod signature",
+                  f'        set certificate "{n}-local"']
+    else:
+        lines.append(f'        set psksecret "{p.psk or "CHANGE-ME"}"')
+    if p.remote.id:
+        lines.append(f'        set peerid "{p.remote.id}"')
+    lines += ["    next", "end",
+              "config vpn ipsec phase2-interface",
+              f'    edit "{n}"',
+              f'        set phase1name "{n}"',
+              f"        set proposal {prop2}",
+              f"        set dhgrp {pfs}",
+              f"        set keylifeseconds {p.phase2.lifetime_seconds}"]
+    l, r = (p.local.protected_subnets or ["0.0.0.0/0"])[0], \
+           (p.remote.protected_subnets or ["0.0.0.0/0"])[0]
+    lines += [f"        set src-subnet {_ip_mask(l)}",
+              f"        set dst-subnet {_ip_mask(r)}",
+              "    next", "end"]
+    return _annotate(p, "\n".join(lines))
+
+
+# --------------------------------------------------------------------------- #
+# Palo Alto (PAN-OS set CLI)
+# --------------------------------------------------------------------------- #
+def gen_palo_alto(p: VpnProfile) -> str:
+    v = "palo_alto"
+    n = p.name
+    ikep = f"{n}-ike"
+    ipsecp = f"{n}-ipsec"
+    gw = f"{n}-gw"
+    ver = "ikev2" if p.phase1.ike_version == "ikev2" else "ikev1"
+    b = "set network ike crypto-profiles"
+    lines = [f"# ---- Palo Alto (PAN-OS) IPsec VPN: {n} ----",
+             f"{b} ike-crypto-profiles {ikep} hash {vendor_kw(INTEGRITY, p.phase1.integrity, v)}",
+             f"{b} ike-crypto-profiles {ikep} dh-group {vendor_kw(DH_GROUPS, p.phase1.dh_group, v)}",
+             f"{b} ike-crypto-profiles {ikep} encryption {vendor_kw(ENCRYPTION, p.phase1.encryption, v)}",
+             f"{b} ike-crypto-profiles {ikep} lifetime seconds {p.phase1.lifetime_seconds}",
+             f"{b} ipsec-crypto-profiles {ipsecp} esp encryption {vendor_kw(ENCRYPTION, p.phase2.encryption, v)}",
+             f"{b} ipsec-crypto-profiles {ipsecp} esp authentication {vendor_kw(INTEGRITY, p.phase2.integrity, v)}",
+             f"{b} ipsec-crypto-profiles {ipsecp} dh-group {vendor_kw(DH_GROUPS, p.phase2.pfs_group, v)}",
+             f"{b} ipsec-crypto-profiles {ipsecp} lifetime seconds {p.phase2.lifetime_seconds}",
+             f"set network ike gateway {gw} protocol version {ver}",
+             f"set network ike gateway {gw} protocol {ver} ike-crypto-profile {ikep}",
+             f"set network ike gateway {gw} peer-address ip {p.remote.public_ip}",
+             f"set network ike gateway {gw} local-address interface ethernet1/1"]
+    if p.phase1.auth_method == "certificate":
+        lines.append(f"set network ike gateway {gw} local-id type fqdn id {p.local.id or n}")
+        lines.append(f"set network ike gateway {gw} authentication certificate local-certificate {n}-local")
+    else:
+        lines.append(f"set network ike gateway {gw} authentication pre-shared-key key {p.psk or 'CHANGE-ME'}")
+    lines += [f"set network tunnel ipsec {n} auto-key ike-gateway {gw}",
+              f"set network tunnel ipsec {n} auto-key ipsec-crypto-profile {ipsecp}",
+              f"set network tunnel ipsec {n} tunnel-interface tunnel.1"]
+    return _annotate(p, "\n".join(lines))
+
+
+# --------------------------------------------------------------------------- #
+# Cisco Firepower Threat Defense (FlexConfig / ASA-style site-to-site)
+# --------------------------------------------------------------------------- #
+def gen_cisco_firepower(p: VpnProfile) -> str:
+    v = "cisco_firepower"
+    n = p.name
+    peer = p.remote.public_ip
+    enc1 = vendor_kw(ENCRYPTION, p.phase1.encryption, v)
+    h1 = vendor_kw(INTEGRITY, p.phase1.integrity, v)
+    enc2 = vendor_kw(ENCRYPTION, p.phase2.encryption, v)
+    h2 = vendor_kw(INTEGRITY, p.phase2.integrity, v)
+    dh1 = vendor_kw(DH_GROUPS, p.phase1.dh_group, v)
+    pfs = vendor_kw(DH_GROUPS, p.phase2.pfs_group, v)
+    ikev2 = p.phase1.ike_version == "ikev2"
+    l = (p.local.protected_subnets or ["0.0.0.0/0"])[0]
+    r = (p.remote.protected_subnets or ["0.0.0.0/0"])[0]
+
+    lines = [f"! ---- Cisco Firepower/FTD (FlexConfig) IPsec VPN: {n} ----"]
+    if ikev2:
+        lines += ["crypto ikev2 policy 10",
+                  f" encryption {enc1}", f" integrity {h1}", f" group {dh1}",
+                  f" prf {h1}", f" lifetime seconds {p.phase1.lifetime_seconds}",
+                  f"crypto ipsec ikev2 ipsec-proposal {n}",
+                  f" protocol esp encryption {enc2}",
+                  f" protocol esp integrity {h2}"]
+    else:
+        lines += ["crypto ikev1 policy 10", " authentication "
+                  + ("rsa-sig" if p.phase1.auth_method == "certificate" else "pre-share"),
+                  f" encryption {enc1}", f" hash {h1}", f" group {dh1}",
+                  f" lifetime {p.phase1.lifetime_seconds}",
+                  f"crypto ipsec ikev1 transform-set {n} esp-{enc1} esp-{h1}-hmac"]
+    lines += [f"access-list {n}_acl extended permit ip {_ip_mask(l)} {_ip_mask(r)}",
+              f"crypto map {n}_map 10 match address {n}_acl",
+              f"crypto map {n}_map 10 set peer {peer}"]
+    if ikev2:
+        lines.append(f"crypto map {n}_map 10 set ikev2 ipsec-proposal {n}")
+        lines.append(f"crypto map {n}_map 10 set pfs {_pan_group(pfs)}")
+    else:
+        lines.append(f"crypto map {n}_map 10 set ikev1 transform-set {n}")
+    lines += [f"crypto map {n}_map interface outside",
+              f"tunnel-group {peer} type ipsec-l2l",
+              f"tunnel-group {peer} ipsec-attributes"]
+    if p.phase1.auth_method == "certificate":
+        lines.append(f" ikev2 local-authentication certificate {n}-trustpoint")
+        lines.append(" ikev2 remote-authentication certificate")
+    else:
+        lines.append(f" ikev2 local-authentication pre-shared-key {p.psk or 'CHANGE-ME'}")
+        lines.append(f" ikev2 remote-authentication pre-shared-key {p.psk or 'CHANGE-ME'}")
+    return _annotate(p, "\n".join(lines))
+
+
+def _pan_group(g: str) -> str:
+    return g  # cisco uses bare group numbers, already mapped
+
+
+def _ip_mask(cidr: str) -> str:
+    """'10.1.0.0/24' -> '10.1.0.0 255.255.255.0' (ASA/FortiOS style)."""
+    import ipaddress as _ip
+    try:
+        net = _ip.ip_network(cidr, strict=False)
+        return f"{net.network_address} {net.netmask}"
+    except ValueError:
+        return cidr
+
+
+# --------------------------------------------------------------------------- #
 def _pairs(a: list[str], b: list[str]):
     a = a or ["0.0.0.0/0"]
     b = b or ["0.0.0.0/0"]
@@ -249,4 +397,7 @@ _REGISTRY = {
     "digi": gen_digi,
     "cradlepoint": gen_cradlepoint,
     "pfsense": gen_pfsense,
+    "fortinet": gen_fortinet,
+    "palo_alto": gen_palo_alto,
+    "cisco_firepower": gen_cisco_firepower,
 }

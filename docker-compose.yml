@@ -28,6 +28,10 @@ services:
       VCM_COOKIE_SECURE: "${VCM_COOKIE_SECURE:-false}"
       # --- Data store (default SQLite on a volume; swap for Postgres) ---
       VCM_DATABASE_URL: "${VCM_DATABASE_URL:-sqlite:////data/vcm.db}"
+    networks:
+      # Default bridge for standalone/dev. The Traefik overlay replaces this with
+      # the Traefik network (via `!override`); Postgres adds a backend network.
+      default: {}
     volumes:
       - vcm-data:/data
     # No published ports in prod — front it with a reverse proxy (see deploy/).

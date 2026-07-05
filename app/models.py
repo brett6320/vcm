@@ -27,9 +27,15 @@ def _enum_col(enum_cls):
 
 
 def utcnow() -> datetime:
-    # Naive UTC: SQLite does not persist tzinfo, so keeping everything naive-UTC
-    # avoids offset-naive/offset-aware comparison errors across the codebase.
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    # Timezone-aware UTC. Postgres timestamptz round-trips aware datetimes; SQLite
+    # drops tzinfo on read, so comparisons must coerce naive values to UTC (see
+    # ensure_aware). Storing aware-UTC keeps Postgres correct.
+    return datetime.now(timezone.utc)
+
+
+def ensure_aware(dt: datetime) -> datetime:
+    """Treat a naive datetime (e.g. read back from SQLite) as UTC."""
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
 class Role(str, enum.Enum):
@@ -54,6 +60,9 @@ class Vendor(str, enum.Enum):
     digi = "digi"
     cradlepoint = "cradlepoint"
     pfsense = "pfsense"
+    cisco_firepower = "cisco_firepower"
+    fortinet = "fortinet"
+    palo_alto = "palo_alto"
 
 
 # --------------------------------------------------------------------------- #
