@@ -43,9 +43,21 @@ def test_srx_generation_and_roundtrip():
 
 
 def test_all_vendors_generate():
-    for v in ("juniper_srx", "digi", "cradlepoint", "pfsense"):
+    for v in ("juniper_srx", "digi", "cradlepoint", "pfsense",
+              "fortinet", "palo_alto", "cisco_firepower"):
         cfg = generators.generate(_mk_profile(vendor=v))
         assert cfg.strip()
+
+
+def test_new_vendor_roundtrips():
+    for v in ("fortinet", "palo_alto", "cisco_firepower"):
+        p = _mk_profile(vendor=v, p1={"encryption": "aes-256-cbc", "dh_group": "20"})
+        cfg = generators.generate(p)
+        back = importer.import_config(cfg)
+        assert back.vendor == v, f"{v} detected as {back.vendor}"
+        assert back.phase1.encryption == "aes-256-cbc", v
+        assert back.phase1.dh_group == "20", v
+        assert back.remote.public_ip == "203.0.113.1", v
 
 
 JUNOS_STRUCTURED = """# Model: srx300

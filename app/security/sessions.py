@@ -7,7 +7,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..models import UserSession, User, utcnow
+from ..models import UserSession, User, ensure_aware, utcnow
 
 
 def create_session(db: Session, user: User, ip: str | None, mfa_ok: bool) -> UserSession:
@@ -30,7 +30,7 @@ def get_session(db: Session, sid: str | None) -> UserSession | None:
     sess = db.get(UserSession, sid)
     if not sess:
         return None
-    if sess.expires_at <= utcnow():
+    if ensure_aware(sess.expires_at) <= utcnow():
         db.delete(sess)
         return None
     return sess

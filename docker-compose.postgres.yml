@@ -1,22 +1,31 @@
 # Postgres overlay. Activate via COMPOSE_FILE and set POSTGRES_PASSWORD in .env.
 # The password is read from .env by Compose interpolation and is never written
 # into any compose file. VCM_DATABASE_URL is assembled from the same variables.
+#
+# The DB service is named `vcm-db` (not `db`) to avoid colliding with an existing
+# `db` DNS record on the deployment network — the app resolves `vcm-db` to this
+# container via Docker's embedded DNS on the shared backend network.
 services:
   vcm:
+    # Add the backend db network to whatever else vcm is on (default or traefik).
+    # Compose merges this with the base/traefik networks — it does not replace them.
+    networks:
+      vcm-db-net: {}
     environment:
       # sslmode=require encrypts the app↔db link in flight (self-signed server
       # cert below). Use verify-full + a mounted CA for cert pinning if desired.
-      VCM_DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-vcm}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-vcm}?sslmode=${POSTGRES_SSLMODE:-require}"
+      VCM_DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-vcm}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@vcm-db:5432/${POSTGRES_DB:-vcm}?sslmode=${POSTGRES_SSLMODE:-require}"
     depends_on:
-      db:
+      vcm-db:
         condition: service_healthy
 
-  db:
+  vcm-db:
     image: postgres:16
     restart: unless-stopped
-    # Never expose the database through Traefik (defense-in-depth; Traefik also
-    # runs with exposedbydefault=false). It is reachable only on the internal
-    # compose network by the vcm service.
+    # Backend-only: sits solely on the internal backend network — no default
+    # network, no external egress, not routable by Traefik. Only vcm can reach it.
+    networks:
+      vcm-db-net: {}
     labels:
       traefik.enable: "false"
     environment:
@@ -45,6 +54,12 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+networks:
+  # Dedicated backend network for app↔db traffic. internal: true means no
+  # gateway to the outside — DB traffic never leaves the host network.
+  vcm-db-net:
+    internal: true
 
 volumes:
   pg-data:

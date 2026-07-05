@@ -40,6 +40,25 @@ def extract_vpn_sections(text: str, vendor: str) -> str:
         return "\n".join(keep) + ("\n" if keep else "")
     if vendor == "pfsense":
         return _extract_brace_blocks(text, ("connections", "secrets"))
+    if vendor == "fortinet":
+        keep, grab = [], False
+        for line in text.splitlines():
+            s = line.strip()
+            if s.startswith("config vpn ipsec"):
+                grab = True
+            if grab:
+                keep.append(line.rstrip())
+            if s == "end":
+                grab = False
+        return "\n".join(keep) + ("\n" if keep else "")
+    if vendor == "palo_alto":
+        keep = [l.rstrip() for l in text.splitlines()
+                if re.search(r"network (ike|tunnel ipsec)", l)]
+        return "\n".join(keep) + ("\n" if keep else "")
+    if vendor == "cisco_firepower":
+        keep = [l.rstrip() for l in text.splitlines()
+                if re.match(r"\s*(crypto |tunnel-group |access-list |group-policy )", l)]
+        return "\n".join(keep) + ("\n" if keep else "")
     return text
 
 
@@ -69,6 +88,14 @@ def detect_vendor(text: str) -> str:
     # Structured (curly-brace) Junos: a `security { ... ike { ... } }` hierarchy.
     if re.search(r"\bsecurity\s*{", text) and re.search(r"\n\s*ike\s*{", text):
         return "juniper_srx"
+    if "config vpn ipsec phase1-interface" in text or "config vpn ipsec phase2-interface" in text:
+        return "fortinet"
+    if "set network ike crypto-profiles" in text or "set network tunnel ipsec" in text \
+            or "set network ike gateway" in text:
+        return "palo_alto"
+    if re.search(r"crypto ikev[12] (policy|ipsec-proposal)", text) \
+            or re.search(r"^\s*crypto map ", text, re.M) or "tunnel-group" in text:
+        return "cisco_firepower"
     if "config set vpn/tunnels" in text:
         return "cradlepoint"
     if "connections {" in text or "esp_proposals" in text or "swanctl" in text:
@@ -165,6 +192,12 @@ def import_site(text: str, name: str | None = None) -> dict:
         profile = _import_pfsense(text, name)
     elif vendor == "cradlepoint":
         profile = _import_cradlepoint(text, name)
+    elif vendor == "fortinet":
+        profile = _import_fortinet(text, name)
+    elif vendor == "palo_alto":
+        profile = _import_palo(text, name)
+    elif vendor == "cisco_firepower":
+        profile = _import_cisco(text, name)
     else:
         profile = _import_srx(text, name)
     vpn_only = extract_vpn_sections(text, vendor)
@@ -469,6 +502,117 @@ def _import_pfsense(text: str, name: str | None) -> VpnProfile:
         remote.protected_subnets = [s for s in m.group(1).split(",") if s]
 
     return VpnProfile(name=inferred or "imported-pfsense", vendor=v, local=local,
+                      remote=remote, phase1=p1, phase2=p2)
+
+
+def _import_fortinet(text: str, name: str | None) -> VpnProfile:
+    v = "fortinet"
+    p1, p2 = Phase1(), Phase2()
+    local, remote = Endpoint(name="local"), Endpoint(name="remote")
+    inferred = name
+    if m := re.search(r'phase1-interface\s+edit\s+"([^"]+)"', text, re.S):
+        inferred = inferred or m.group(1)
+    elif m := re.search(r'edit\s+"([^"]+)"', text):
+        inferred = inferred or m.group(1)
+    if m := re.search(r"set remote-gw (\S+)", text):
+        remote.public_ip = m.group(1)
+    if m := re.search(r"set ike-version (\d)", text):
+        p1.ike_version = "ikev2" if m.group(1) == "2" else "ikev1"
+    # first proposal line = phase1, look for a second for phase2
+    props = re.findall(r"set proposal (\S+)", text)
+    if props:
+        _fortinet_prop(props[0], p1, v)
+    if len(props) > 1:
+        _fortinet_prop(props[1], p2, v)
+    dhs = re.findall(r"set dhgrp (\S+)", text)
+    if dhs:
+        p1.dh_group = _reverse(DH_GROUPS, v, dhs[0])
+    if len(dhs) > 1:
+        p2.pfs_group = _reverse(DH_GROUPS, v, dhs[1])
+    if "set authmethod signature" in text:
+        p1.auth_method = "certificate"
+    elif "set psksecret" in text:
+        p1.auth_method = "psk"
+    return VpnProfile(name=inferred or "imported-fortinet", vendor=v, local=local,
+                      remote=remote, phase1=p1, phase2=p2)
+
+
+def _fortinet_prop(prop: str, phase, v: str) -> None:
+    # e.g. "aes256-sha256" or "aes256gcm"
+    if "gcm" in prop:
+        phase.encryption = _reverse(ENCRYPTION, v, prop)
+        return
+    parts = prop.split("-")
+    if parts:
+        phase.encryption = _reverse(ENCRYPTION, v, parts[0])
+    if len(parts) > 1:
+        phase.integrity = _reverse(INTEGRITY, v, parts[1])
+
+
+def _import_palo(text: str, name: str | None) -> VpnProfile:
+    v = "palo_alto"
+    p1, p2 = Phase1(), Phase2()
+    local, remote = Endpoint(name="local"), Endpoint(name="remote")
+    inferred = name
+    if m := re.search(r"set network tunnel ipsec (\S+)", text):
+        inferred = inferred or m.group(1)
+    if m := re.search(r"ike-crypto-profiles \S+ encryption (\S+)", text):
+        p1.encryption = _reverse(ENCRYPTION, v, m.group(1))
+    if m := re.search(r"ike-crypto-profiles \S+ hash (\S+)", text):
+        p1.integrity = _reverse(INTEGRITY, v, m.group(1))
+    if m := re.search(r"ike-crypto-profiles \S+ dh-group (\S+)", text):
+        p1.dh_group = _reverse(DH_GROUPS, v, m.group(1))
+    if m := re.search(r"ipsec-crypto-profiles \S+ esp encryption (\S+)", text):
+        p2.encryption = _reverse(ENCRYPTION, v, m.group(1))
+    if m := re.search(r"ipsec-crypto-profiles \S+ esp authentication (\S+)", text):
+        p2.integrity = _reverse(INTEGRITY, v, m.group(1))
+    if m := re.search(r"ipsec-crypto-profiles \S+ dh-group (\S+)", text):
+        p2.pfs_group = _reverse(DH_GROUPS, v, m.group(1))
+    if m := re.search(r"gateway \S+ peer-address ip (\S+)", text):
+        remote.public_ip = m.group(1)
+    if "protocol version ikev1" in text:
+        p1.ike_version = "ikev1"
+    elif "protocol version ikev2" in text:
+        p1.ike_version = "ikev2"
+    if "authentication certificate" in text:
+        p1.auth_method = "certificate"
+    elif "pre-shared-key" in text:
+        p1.auth_method = "psk"
+    return VpnProfile(name=inferred or "imported-palo", vendor=v, local=local,
+                      remote=remote, phase1=p1, phase2=p2)
+
+
+def _import_cisco(text: str, name: str | None) -> VpnProfile:
+    v = "cisco_firepower"
+    p1, p2 = Phase1(), Phase2()
+    local, remote = Endpoint(name="local"), Endpoint(name="remote")
+    inferred = name
+    if m := re.search(r"crypto map (\S+)_map", text):
+        inferred = inferred or m.group(1)
+    p1.ike_version = "ikev2" if "crypto ikev2 policy" in text else "ikev1"
+    if m := re.search(r"ikev2 policy[\s\S]{0,200}?encryption (\S+)", text):
+        p1.encryption = _reverse(ENCRYPTION, v, m.group(1))
+    elif m := re.search(r"ikev1 policy[\s\S]{0,200}?encryption (\S+)", text):
+        p1.encryption = _reverse(ENCRYPTION, v, m.group(1))
+    if m := re.search(r"\n\s*integrity (\S+)", text):
+        p1.integrity = _reverse(INTEGRITY, v, m.group(1))
+    elif m := re.search(r"\n\s*hash (\S+)", text):
+        p1.integrity = _reverse(INTEGRITY, v, m.group(1))
+    if m := re.search(r"\n\s*group (\S+)", text):
+        p1.dh_group = _reverse(DH_GROUPS, v, m.group(1))
+    if m := re.search(r"protocol esp encryption (\S+)", text):
+        p2.encryption = _reverse(ENCRYPTION, v, m.group(1))
+    if m := re.search(r"protocol esp integrity (\S+)", text):
+        p2.integrity = _reverse(INTEGRITY, v, m.group(1))
+    if m := re.search(r"set pfs (\S+)", text):
+        p2.pfs_group = _reverse(DH_GROUPS, v, m.group(1))
+    if m := re.search(r"set peer (\S+)", text):
+        remote.public_ip = m.group(1)
+    if "rsa-sig" in text or "authentication certificate" in text:
+        p1.auth_method = "certificate"
+    elif "pre-shared-key" in text or "pre-share" in text:
+        p1.auth_method = "psk"
+    return VpnProfile(name=inferred or "imported-cisco", vendor=v, local=local,
                       remote=remote, phase1=p1, phase2=p2)
 
 
