@@ -195,6 +195,25 @@ def test_hierarchy_lineage_no_private_keys():
         assert "PRIVATE" not in blob and "key_enc" not in blob
 
 
+def test_multiple_passkeys_per_user():
+    from app.db import SessionLocal, init_db
+    from app.models import User, WebAuthnCredential
+    init_db()
+    with SessionLocal() as db:
+        u = User(username="pk-user", password_hash="x")
+        db.add(u)
+        db.flush()
+        db.add(WebAuthnCredential(user_id=u.id, name="laptop",
+                                  credential_id=b"cred-1", public_key=b"k1"))
+        db.add(WebAuthnCredential(user_id=u.id, name="yubikey",
+                                  credential_id=b"cred-2", public_key=b"k2"))
+        db.commit()
+        db.refresh(u)
+        assert len(u.credentials) == 2
+        assert {c.name for c in u.credentials} == {"laptop", "yubikey"}
+        assert u.has_mfa
+
+
 def test_pki_hierarchy_and_csr_sign():
     from app.db import SessionLocal, init_db
     init_db()

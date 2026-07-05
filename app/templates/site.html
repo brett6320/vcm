@@ -2,7 +2,7 @@
 {% from "_macros.html" import rated_select, icon %}
 {% block content %}
 <p><a href="/sites">← Sites</a></p>
-<h1>{{ site.name }} <span class="muted">({{ site.vendor.value }}{% if site.model %} · {{ site.model }}{% endif %})</span></h1>
+<h1>{{ site.name }} <span class="muted">({{ site.vendor.label }}{% if site.model %} · {{ site.model }}{% endif %})</span></h1>
 
 <div class="card">
   <h3>VPN connections ({{ conns|length }})</h3>

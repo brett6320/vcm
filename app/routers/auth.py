@@ -203,7 +203,7 @@ async def enroll_passkey_verify(request: Request, db: Session = Depends(get_db),
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"registration failed: {e}"}, status_code=400)
     db.add(WebAuthnCredential(
-        user_id=user.id, name=body.get("name", "passkey"),
+        user_id=user.id, name=(body.get("name") or "passkey")[:64],
         credential_id=res.credential_id, public_key=res.credential_public_key,
         sign_count=res.sign_count,
     ))

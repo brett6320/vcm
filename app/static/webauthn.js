@@ -14,14 +14,25 @@ function bufToB64url(buf) {
   return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-async function registerPasskey() {
+// Register a (possibly additional) passkey. `redirect` is where to go on success.
+async function registerPasskey(redirect) {
+  const name = window.prompt('Name this passkey (e.g. YubiKey, Laptop, Phone):', 'passkey');
+  if (name === null) return;  // cancelled
   const opts = await (await fetch('/mfa/enroll/passkey/options', { method: 'POST' })).json();
   opts.challenge = b64urlToBuf(opts.challenge);
   opts.user.id = b64urlToBuf(opts.user.id);
   (opts.excludeCredentials || []).forEach(c => c.id = b64urlToBuf(c.id));
-  const cred = await navigator.credentials.create({ publicKey: opts });
+  let cred;
+  try {
+    cred = await navigator.credentials.create({ publicKey: opts });
+  } catch (e) {
+    alert('Passkey registration cancelled or not possible on this authenticator.\n' +
+          'Already-registered authenticators are excluded — use a different one.');
+    return;
+  }
   const body = {
     id: cred.id, rawId: bufToB64url(cred.rawId), type: cred.type,
+    name: name || 'passkey',
     response: {
       attestationObject: bufToB64url(cred.response.attestationObject),
       clientDataJSON: bufToB64url(cred.response.clientDataJSON),
@@ -29,7 +40,7 @@ async function registerPasskey() {
   };
   const r = await fetch('/mfa/enroll/passkey/verify',
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (r.ok) location.href = '/'; else alert('Passkey registration failed');
+  if (r.ok) location.href = redirect || '/'; else alert('Passkey registration failed');
 }
 
 async function authPasskey() {

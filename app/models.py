@@ -64,6 +64,29 @@ class Vendor(str, enum.Enum):
     fortinet = "fortinet"
     palo_alto = "palo_alto"
 
+    @property
+    def label(self) -> str:
+        base = _VENDOR_LABELS.get(self.value, self.value)
+        return base if self.tested else f"{base} (untested)"
+
+    @property
+    def tested(self) -> bool:
+        return self.value in _TESTED_VENDORS
+
+
+_VENDOR_LABELS = {
+    "juniper_srx": "Juniper SRX",
+    "digi": "Digi",
+    "cradlepoint": "Cradlepoint",
+    "pfsense": "pfSense",
+    "cisco_firepower": "Cisco Firepower",
+    "fortinet": "Fortinet",
+    "palo_alto": "Palo Alto",
+}
+
+# Only these are validated end-to-end; the rest are generated best-effort.
+_TESTED_VENDORS = {"juniper_srx", "cradlepoint"}
+
 
 # --------------------------------------------------------------------------- #
 # Identity & access
