@@ -1,0 +1,28 @@
+# Postgres overlay. Activate via COMPOSE_FILE and set POSTGRES_PASSWORD in .env.
+# The password is read from .env by Compose interpolation and is never written
+# into any compose file. VCM_DATABASE_URL is assembled from the same variables.
+services:
+  vcm:
+    environment:
+      VCM_DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-vcm}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-vcm}"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-vcm}"
+      POSTGRES_DB: "${POSTGRES_DB:-vcm}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vcm} -d ${POSTGRES_DB:-vcm}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pg-data:
