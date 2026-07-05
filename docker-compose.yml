@@ -33,16 +33,9 @@ services:
     # No published ports in prod — front it with a reverse proxy (see deploy/).
     # Dev port publishing is added automatically by docker-compose.dev.yml
     # (activated via COMPOSE_FILE in .env — see .env.example).
-
-  # Uncomment for Postgres:
-  # db:
-  #   image: postgres:16
-  #   environment:
-  #     POSTGRES_DB: vcm
-  #     POSTGRES_USER: vcm
-  #     POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
-  #   volumes: ["pg-data:/var/lib/postgresql/data"]
+    #
+    # Postgres is opt-in via docker-compose.postgres.yml (also COMPOSE_FILE).
+    # It builds VCM_DATABASE_URL from POSTGRES_PASSWORD in .env — no secret here.
 
 volumes:
   vcm-data:
-  # pg-data:
