@@ -224,6 +224,70 @@ def gen_pfsense(p: VpnProfile) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Native strongSwan (swanctl.conf) — same renderer as pfSense's swanctl output
+# --------------------------------------------------------------------------- #
+def gen_strongswan(p: VpnProfile) -> str:
+    # strongSwan keyword set matches pfSense's; reuse the swanctl builder.
+    orig = p.vendor
+    p.vendor = "strongswan"
+    try:
+        cfg = gen_pfsense(p)
+    finally:
+        p.vendor = orig
+    return cfg.replace("pfSense / strongSwan", "native strongSwan")
+
+
+# --------------------------------------------------------------------------- #
+# MikroTik RouterOS (/ip ipsec CLI)
+# --------------------------------------------------------------------------- #
+def gen_mikrotik(p: VpnProfile) -> str:
+    v = "mikrotik"
+    n = p.name
+    enc1 = vendor_kw(ENCRYPTION, p.phase1.encryption, v)
+    p1_enc = _mt_profile_enc(enc1)  # phase1 profile uses e.g. "aes-256"
+    h1 = vendor_kw(INTEGRITY, p.phase1.integrity, v)
+    dh1 = vendor_kw(DH_GROUPS, p.phase1.dh_group, v)
+    enc2 = vendor_kw(ENCRYPTION, p.phase2.encryption, v)
+    h2 = vendor_kw(INTEGRITY, p.phase2.integrity, v)
+    pfs = vendor_kw(DH_GROUPS, p.phase2.pfs_group, v)
+    exch = "ike2" if p.phase1.ike_version == "ikev2" else "main"
+    l = (p.local.protected_subnets or ["0.0.0.0/0"])[0]
+    r = (p.remote.protected_subnets or ["0.0.0.0/0"])[0]
+
+    lines = [f"# ---- MikroTik RouterOS IPsec VPN: {n} ----",
+             f"/ip ipsec profile add name={n} hash-algorithm={h1} enc-algorithm={p1_enc} "
+             f"dh-group={dh1} lifetime={_secs(p.phase1.lifetime_seconds)}",
+             f"/ip ipsec proposal add name={n} auth-algorithms={h2} enc-algorithms={enc2} "
+             f"pfs-group={pfs} lifetime={_secs(p.phase2.lifetime_seconds)}",
+             f"/ip ipsec peer add name={n} address={p.remote.public_ip}/32 profile={n} "
+             f"exchange-mode={exch}"]
+    if p.phase1.auth_method == "certificate":
+        lines.append(f"/ip ipsec identity add peer={n} auth-method=digital-signature "
+                     f"certificate={n}-local")
+    else:
+        lines.append(f'/ip ipsec identity add peer={n} auth-method=pre-shared-key '
+                     f'secret="{p.psk or "CHANGE-ME"}"')
+    lines.append(f"/ip ipsec policy add peer={n} src-address={l} dst-address={r} "
+                 f"tunnel=yes proposal={n}")
+    return _annotate(p, "\n".join(lines))
+
+
+def _mt_profile_enc(enc2_kw: str) -> str:
+    # RouterOS phase-1 profile enc-algorithm: aes-256 / aes-192 / aes-128 / 3des / des.
+    m = {"aes-256-cbc": "aes-256", "aes-256-gcm": "aes-256", "aes-192-cbc": "aes-192",
+         "aes-128-cbc": "aes-128", "aes-128-gcm": "aes-128", "3des": "3des", "des": "des"}
+    return m.get(enc2_kw, "aes-256")
+
+
+def _secs(seconds: int) -> str:
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600}h"
+    if seconds % 60 == 0:
+        return f"{seconds // 60}m"
+    return f"{seconds}s"
+
+
+# --------------------------------------------------------------------------- #
 # Fortinet (FortiOS CLI)
 # --------------------------------------------------------------------------- #
 def gen_fortinet(p: VpnProfile) -> str:
@@ -400,4 +464,6 @@ _REGISTRY = {
     "fortinet": gen_fortinet,
     "palo_alto": gen_palo_alto,
     "cisco_firepower": gen_cisco_firepower,
+    "strongswan": gen_strongswan,
+    "mikrotik": gen_mikrotik,
 }

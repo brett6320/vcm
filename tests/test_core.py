@@ -43,10 +43,27 @@ def test_srx_generation_and_roundtrip():
 
 
 def test_all_vendors_generate():
-    for v in ("juniper_srx", "digi", "cradlepoint", "pfsense",
-              "fortinet", "palo_alto", "cisco_firepower"):
+    for v in ("juniper_srx", "digi", "cradlepoint", "pfsense", "fortinet",
+              "palo_alto", "cisco_firepower", "strongswan", "mikrotik"):
         cfg = generators.generate(_mk_profile(vendor=v))
         assert cfg.strip()
+
+
+def test_strongswan_and_mikrotik_roundtrip():
+    # strongSwan uses swanctl (like pfSense) but must detect as strongswan
+    ss = generators.generate(_mk_profile(vendor="strongswan"))
+    assert "connections {" in ss and "strongSwan" in ss
+    back = importer.import_config(ss)
+    assert back.vendor == "strongswan"
+    # MikroTik RouterOS
+    p = _mk_profile(vendor="mikrotik", p1={"encryption": "aes-256-cbc", "dh_group": "20"})
+    mt = generators.generate(p)
+    assert mt.startswith("# ---- MikroTik") and "/ip ipsec" in mt
+    b2 = importer.import_config(mt)
+    assert b2.vendor == "mikrotik"
+    assert b2.phase1.encryption == "aes-256-cbc"
+    assert b2.phase1.dh_group == "20"
+    assert b2.remote.public_ip == "203.0.113.1"
 
 
 def test_new_vendor_roundtrips():

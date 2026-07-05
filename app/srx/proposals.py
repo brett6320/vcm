@@ -113,6 +113,36 @@ DH_GROUPS = {
                 "fortinet": "21", "palo_alto": "group21"}),
 }
 
+# --------------------------------------------------------------------------- #
+# Additional vendor keyword maps injected onto the Algo.vendor dicts, to keep the
+# literals above readable. strongSwan mirrors the swanctl names (as pfSense);
+# MikroTik uses RouterOS /ip ipsec names.
+# --------------------------------------------------------------------------- #
+def _inject(table: dict, vendor: str, mapping: dict) -> None:
+    for canon, kw in mapping.items():
+        if canon in table:
+            table[canon].vendor[vendor] = kw
+
+
+_inject(ENCRYPTION, "strongswan", {
+    "des": "des", "3des": "3des", "aes-128-cbc": "aes128", "aes-192-cbc": "aes192",
+    "aes-256-cbc": "aes256", "aes-128-gcm": "aes128gcm16", "aes-256-gcm": "aes256gcm16"})
+_inject(INTEGRITY, "strongswan", {
+    "md5": "md5", "sha1": "sha1", "sha256": "sha256", "sha384": "sha384", "sha512": "sha512"})
+_inject(DH_GROUPS, "strongswan", {
+    "1": "modp768", "2": "modp1024", "5": "modp1536", "14": "modp2048", "15": "modp3072",
+    "16": "modp4096", "19": "ecp256", "20": "ecp384", "21": "ecp521"})
+
+_inject(ENCRYPTION, "mikrotik", {
+    "des": "des", "3des": "3des", "aes-128-cbc": "aes-128-cbc", "aes-192-cbc": "aes-192-cbc",
+    "aes-256-cbc": "aes-256-cbc", "aes-128-gcm": "aes-128-gcm", "aes-256-gcm": "aes-256-gcm"})
+_inject(INTEGRITY, "mikrotik", {
+    "md5": "md5", "sha1": "sha1", "sha256": "sha256", "sha384": "sha384", "sha512": "sha512"})
+_inject(DH_GROUPS, "mikrotik", {
+    "1": "modp768", "2": "modp1024", "5": "modp1536", "14": "modp2048", "15": "modp3072",
+    "16": "modp4096", "19": "ecp256", "20": "ecp384", "21": "ecp521"})
+
+
 # IKE version
 IKE_VERSIONS = {"ikev1": Security.weak, "ikev2": Security.strong}
 
