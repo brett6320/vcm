@@ -1,0 +1,58 @@
+name: CI
+
+# Build + test on every PR and on pushes to non-main branches.
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check .
+        continue-on-error: true
+      - name: Test
+        run: pytest -q
+
+  build-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: vcm:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test container
+        run: |
+          KEK=$(python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())")
+          docker run -d --name vcm -p 8000:8000 \
+            -e VCM_SECRET_KEY=ci-only \
+            -e VCM_KEK_B64="$KEK" \
+            -e VCM_ENFORCE_IP_ALLOWLIST=false \
+            vcm:ci
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/healthz >/dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "${ok:-0}" != "1" ]; then echo "container did not become healthy"; docker logs vcm; exit 1; fi
+          curl -sf http://localhost:8000/healthz | grep -q '"ok"'
+          echo "container healthy"
+          docker rm -f vcm
