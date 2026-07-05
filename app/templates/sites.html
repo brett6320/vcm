@@ -7,7 +7,7 @@
     <tr><th>Name</th><th>Vendor</th><th>Model</th><th>Connections</th><th>Source</th>
         {% if user.role.value == 'admin' %}<th></th>{% endif %}</tr>
     {% for s in sites %}
-    <tr><td><a href="/sites/{{ s.id }}">{{ s.name }}</a></td><td>{{ s.vendor.value }}</td>
+    <tr><td><a href="/sites/{{ s.id }}">{{ s.name }}</a></td><td>{{ s.vendor.label }}</td>
         <td>{{ s.model or '—' }}</td><td>{{ counts.get(s.id, 0) }}</td><td>{{ s.source }}</td>
         {% if user.role.value == 'admin' %}
         <td><form method="post" action="/sites/{{ s.id }}/delete"
@@ -28,7 +28,7 @@
     <div class="row3">
       <div><label>Site (device) name</label><input name="name" required></div>
       <div><label>Vendor</label><select name="vendor">
-        {% for v in vendors %}<option value="{{ v.value }}">{{ v.value }}</option>{% endfor %}</select></div>
+        {% for v in vendors %}<option value="{{ v.value }}">{{ v.label }}</option>{% endfor %}</select></div>
       <div><label>Model</label><input name="model" placeholder="SRX300 / IX20 / IBR900"></div>
     </div>
     <label>Connection name</label><input name="conn_name" placeholder="e.g. hq-to-dc (blank = auto)">

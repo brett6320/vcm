@@ -3,7 +3,7 @@
 {% macro side(label, d) %}
 <div class="card">
   <h3>{{ label }}: {{ d.site.name }} / {{ d.conn.name }}
-    <span class="muted">({{ d.site.vendor.value }})</span></h3>
+    <span class="muted">({{ d.site.vendor.label }})</span></h3>
   {% if d.warnings %}
     <div class="warn-box"><strong>{{ icon('warn') }} {{ d.warnings|length }} warning(s)</strong>
       <ul>{% for w in d.warnings %}<li class="sev-{{ w.severity }}">{{ w.message }}</li>{% endfor %}</ul></div>

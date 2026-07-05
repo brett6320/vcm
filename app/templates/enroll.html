@@ -16,8 +16,9 @@
 
   <hr>
   <h3>Option B — Passkey (WebAuthn)</h3>
-  <button class="btn" onclick="registerPasskey()">{{ icon('key') }} Register passkey</button>
-  {% if has_passkey %}<p class="muted">You already have a passkey registered.</p>{% endif %}
+  <button class="btn" onclick="registerPasskey('/')">{{ icon('key') }} Register passkey</button>
+  {% if has_passkey %}<p class="muted">You already have a passkey registered. You can add
+    more from your <a href="/profile">profile</a>.</p>{% endif %}
 </div>
 {% endblock %}
 {% block scripts %}<script src="/static/webauthn.js"></script>{% endblock %}

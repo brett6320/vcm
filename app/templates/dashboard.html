@@ -19,7 +19,7 @@
     <tr><th>Name</th><th>Vendor</th><th>Source</th></tr>
     {% for s in recent_sites %}
     <tr><td><a href="/sites/{{ s.id }}">{{ s.name }}</a></td>
-        <td>{{ s.vendor.value }}</td><td>{{ s.source }}</td></tr>
+        <td>{{ s.vendor.label }}</td><td>{{ s.source }}</td></tr>
     {% endfor %}
   </table>
 </div>

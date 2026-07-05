@@ -13,7 +13,7 @@
     <div style="flex:0 0 240px"><label>Far-end platform</label>
       <select name="vendor" onchange="this.form.submit()">
         {% for v in vendors %}
-        <option value="{{ v.value }}" {% if v.value == vendor %}selected{% endif %}>{{ v.value }}</option>
+        <option value="{{ v.value }}" {% if v.value == vendor %}selected{% endif %}>{{ v.label }}</option>
         {% endfor %}
       </select>
     </div>
