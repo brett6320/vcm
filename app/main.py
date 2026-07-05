@@ -47,6 +47,7 @@ app.include_router(ui.router)
 app.include_router(auth.router)
 app.include_router(pki.router)
 app.include_router(sites.router)
+app.include_router(sites.conn_router)
 app.include_router(profile.router)
 app.include_router(admin.router)
 

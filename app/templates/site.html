@@ -1,74 +1,75 @@
 {% extends "base.html" %}
+{% from "_macros.html" import rated_select, icon %}
 {% block content %}
-<h1>{{ site.name }} <span class="muted">({{ site.vendor.value }})</span></h1>
-{% if imported %}<div class="alert notice">Imported and stored. You can now generate a compatible peer.</div>{% endif %}
-
-{% if warnings %}
-<div class="warn-box">
-  <strong>⚠ Security warnings ({{ warnings|length }})</strong>
-  <ul>{% for w in warnings %}
-    <li class="sev-{{ w.severity }}">[{{ w.severity|upper }}] {{ w.message }}</li>
-  {% endfor %}</ul>
-</div>
-{% else %}
-<div class="alert notice">All negotiated algorithms rated strong. ✅</div>
-{% endif %}
+<p><a href="/sites">← Sites</a></p>
+<h1>{{ site.name }} <span class="muted">({{ site.vendor.value }}{% if site.model %} · {{ site.model }}{% endif %})</span></h1>
 
 <div class="card">
-  <h3>Parameters</h3>
-  <div class="row">
-    <div><strong>Phase 1:</strong> {{ profile.phase1.ike_version }} / {{ profile.phase1.encryption }} /
-      {{ profile.phase1.integrity }} / DH{{ profile.phase1.dh_group }} / {{ profile.phase1.auth_method }}</div>
-    <div><strong>Phase 2:</strong> {{ profile.phase2.encryption }} / {{ profile.phase2.integrity }} /
-      PFS{{ profile.phase2.pfs_group }}</div>
-  </div>
-  <p class="muted">Remote GW: {{ profile.remote.public_ip or '—' }} · Local subnets:
-    {{ profile.local.protected_subnets|join(', ') or '—' }} · Remote subnets:
-    {{ profile.remote.protected_subnets|join(', ') or '—' }}</p>
-</div>
-
-<div class="card">
-  <h3>Generated configuration</h3>
-  <a class="btn small" href="/sites/{{ site.id }}/config">Download</a>
-  <pre>{{ site.generated_config }}</pre>
+  <h3>VPN connections ({{ conns|length }})</h3>
+  <table>
+    <tr><th>Name</th><th>Remote GW</th><th>Phase 1</th><th>Status</th><th>Peer</th><th></th></tr>
+    {% for row in conns %}
+    {% set c = row.c %}
+    {% set p = row.p %}
+    <tr>
+      <td><a href="/connections/{{ c.id }}">{{ c.name }}</a>
+          {% if c.needs_review %}<span class="sev-weak" title="{{ c.review_note }}">{{ icon('warn',14) }}</span>{% endif %}</td>
+      <td>{{ p.remote.public_ip or '—' }}</td>
+      <td class="muted">{{ p.phase1.encryption }}/{{ p.phase1.integrity }}/DH{{ p.phase1.dh_group }}</td>
+      <td>{% if row.warnings %}<span class="sev-weak">{{ icon('warn',14) }} {{ row.warnings|length }} warn</span>
+          {% else %}<span style="color:var(--ok)">{{ icon('ok',14) }} strong</span>{% endif %}</td>
+      <td>{% if c.peer_connection_id %}<a href="/connections/{{ c.peer_connection_id }}">paired</a>{% else %}—{% endif %}</td>
+      <td>
+        <a class="btn small" href="/connections/{{ c.id }}/far-end">Far-end config</a>
+        {% if user.role.value == 'admin' %}
+        <form method="post" action="/connections/{{ c.id }}/delete" style="display:inline"
+              onsubmit="return confirm('Delete connection {{ c.name }}?');">
+          <button class="btn small danger">Delete</button></form>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
 </div>
 
 <div class="card">
-  <h3>Compatible peer (far-end)</h3>
-  {% if peer %}
-    <p>Peer config: <a href="/sites/{{ peer.id }}">{{ peer.name }}</a> — mirrored crypto guarantees interop.</p>
-  {% else %}
-    <p class="muted">Crypto is mirrored automatically (guaranteed interop). Enter the
-      far-end's endpoint details below.</p>
-    <form method="post" action="/sites/{{ site.id }}/peer">
-      <div class="row3">
-        <div><label>Peer name</label><input name="peer_name" value="{{ site.name }}-peer"></div>
-        <div><label>Endpoint type (vendor)</label>
-          <select name="peer_vendor">
-            {% for v in vendors %}
-            <option value="{{ v.value }}" {% if v.value == peer_suggest.vendor %}selected{% endif %}>{{ v.value }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div><label>Model</label><input name="peer_model" placeholder="SRX300 / IX20 / …"></div>
-      </div>
-      <div class="row">
-        <div><label>Far-end public IP</label>
-          <input name="peer_public_ip" value="{{ peer_suggest.local.public_ip }}"
-                 placeholder="peer gateway address"></div>
-        <div><label>Far-end IKE ID <span class="muted">(blank = auto)</span></label>
-          <input name="peer_ike_id" value="{{ peer_suggest.local.id }}"></div>
-      </div>
-      <button class="btn" style="margin-top:.6rem">Generate compatible far-end config</button>
-    </form>
-  {% endif %}
+  <h3>Add a connection to {{ site.name }}</h3>
+  <form method="post" action="/sites/{{ site.id }}/connections">
+    <label>Connection name</label><input name="conn_name" placeholder="blank = auto">
+    <div class="row">
+      <fieldset><legend>Local endpoint</legend>
+        <label>Public IP</label><input name="local_ip">
+        <label>IKE ID <span class="muted">(blank = auto)</span></label><input name="local_id">
+        <label>Protected subnets *</label><input name="local_subnets" required>
+      </fieldset>
+      <fieldset><legend>Remote endpoint</legend>
+        <label>Public IP *</label><input name="remote_ip" required>
+        <label>IKE ID <span class="muted">(blank = auto)</span></label><input name="remote_id">
+        <label>Protected subnets *</label><input name="remote_subnets" required>
+      </fieldset>
+    </div>
+    <div class="row3">
+      <div><label>Auth</label>{{ rated_select('auth_method', opts.auth_methods, defaults.phase1.auth_method) }}</div>
+      <div><label>PSK (if used)</label><input name="psk"></div>
+      <div><label>IKE version</label>{{ rated_select('p1_ver', opts.ike_versions, defaults.phase1.ike_version) }}</div>
+    </div>
+    <div class="row3">
+      <div><label>P1 encryption</label>{{ rated_select('p1_enc', opts.encryption, defaults.phase1.encryption) }}</div>
+      <div><label>P1 integrity</label>{{ rated_select('p1_integ', opts.integrity, defaults.phase1.integrity) }}</div>
+      <div><label>P1 DH group</label>{{ rated_select('p1_dh', opts.dh_groups, defaults.phase1.dh_group) }}</div>
+    </div>
+    <div class="row3">
+      <div><label>P2 encryption</label>{{ rated_select('p2_enc', opts.encryption, defaults.phase2.encryption) }}</div>
+      <div><label>P2 integrity</label>{{ rated_select('p2_integ', opts.integrity, defaults.phase2.integrity) }}</div>
+      <div><label>P2 PFS group</label>{{ rated_select('p2_pfs', opts.dh_groups, defaults.phase2.pfs_group) }}</div>
+    </div>
+    <button class="btn" style="margin-top:.8rem">Add connection</button>
+  </form>
 </div>
 
-{% if user and user.role.value == 'admin' %}
+{% if user.role.value == 'admin' %}
 <div class="card">
   <h3>Danger zone</h3>
   <form method="post" action="/sites/{{ site.id }}/delete"
-        onsubmit="return confirm('Delete site {{ site.name }}? This cannot be undone.');">
+        onsubmit="return confirm('Delete {{ site.name }} and all its connections?');">
     <button class="btn danger">Delete this site</button>
   </form>
 </div>

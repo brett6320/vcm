@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon %}
+{% block content %}
+<p><a href="/sites/{{ site.id }}">← {{ site.name }}</a></p>
+<h1>{{ conn.name }} <span class="muted">on {{ site.name }} ({{ site.vendor.value }})</span></h1>
+
+{% if conn.needs_review %}
+<div class="warn-box"><strong>{{ icon('warn') }} Imported — needs review.</strong>
+  {{ conn.review_note or 'Some parameters could not be parsed; verify before use.' }}</div>
+{% endif %}
+
+{% if warnings %}
+<div class="warn-box">
+  <strong>{{ icon('warn') }} Security warnings ({{ warnings|length }})</strong>
+  <ul>{% for w in warnings %}<li class="sev-{{ w.severity }}">[{{ w.severity|upper }}] {{ w.message }}</li>{% endfor %}</ul>
+</div>
+{% else %}
+<div class="alert notice">{{ icon('ok') }} All negotiated algorithms rated strong.</div>
+{% endif %}
+
+<div class="card">
+  <h3>Parameters</h3>
+  <div class="row">
+    <div><strong>Phase 1:</strong> {{ profile.phase1.ike_version }} / {{ profile.phase1.encryption }} /
+      {{ profile.phase1.integrity }} / DH{{ profile.phase1.dh_group }} / {{ profile.phase1.auth_method }}</div>
+    <div><strong>Phase 2:</strong> {{ profile.phase2.encryption }} / {{ profile.phase2.integrity }} / PFS{{ profile.phase2.pfs_group }}</div>
+  </div>
+  <p class="muted">Local {{ profile.local.public_ip or '—' }} ({{ profile.local.id }}) subnets
+    {{ profile.local.protected_subnets|join(', ') or '—' }} · Remote {{ profile.remote.public_ip or '—' }}
+    ({{ profile.remote.id }}) subnets {{ profile.remote.protected_subnets|join(', ') or '—' }}</p>
+</div>
+
+<div class="card">
+  <h3>Generated configuration</h3>
+  <a class="btn small" href="/connections/{{ conn.id }}/config">Download</a>
+  <a class="btn small" href="/connections/{{ conn.id }}/far-end">Far-end config (on the fly)</a>
+  <pre>{{ conn.generated_config }}</pre>
+</div>
+
+<div class="card">
+  <h3>Far-end (peer) configuration</h3>
+  {% if peer %}
+    <p>Paired with <a href="/connections/{{ peer.id }}">{{ peer.name }}</a>
+      on <a href="/sites/{{ peer_site.id }}">{{ peer_site.name }}</a> — mirrored crypto.</p>
+    <a class="btn small" href="/connections/{{ peer.id }}/config">Download peer config</a>
+  {% else %}
+  <p class="muted">Crypto is mirrored automatically (guaranteed interop). Pick an existing
+    connection to pair with, or create a new far-end.</p>
+  <form method="post" action="/connections/{{ conn.id }}/peer">
+    <label><input type="radio" name="target" value="new" checked style="width:auto"> Create a new far-end connection</label>
+    <div class="row3" style="margin:.3rem 0 1rem;">
+      <div><label>On site</label>
+        <select name="target_site_id">
+          <option value="">— new site —</option>
+          {% for s in sites %}{% if s.id != site.id %}<option value="{{ s.id }}">{{ s.name }} ({{ s.vendor.value }})</option>{% endif %}{% endfor %}
+        </select>
+      </div>
+      <div><label>New site name</label><input name="new_site_name" placeholder="{{ site.name }}-peer"></div>
+      <div><label>New site vendor</label>
+        <select name="peer_vendor">
+          {% for v in vendors %}<option value="{{ v.value }}" {% if v.value == peer_suggest.vendor %}selected{% endif %}>{{ v.value }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="row3">
+      <div><label>Connection name</label><input name="peer_conn_name" placeholder="{{ conn.name }}-peer"></div>
+      <div><label>Far-end public IP</label><input name="peer_public_ip" value="{{ peer_suggest.local.public_ip }}"></div>
+      <div><label>Far-end IKE ID <span class="muted">(blank=auto)</span></label><input name="peer_ike_id" value="{{ peer_suggest.local.id }}"></div>
+    </div>
+
+    {% if candidates %}
+    <hr>
+    <label><input type="radio" name="target" value="existing" style="width:auto"> Pair with an existing connection (updates it to match)</label>
+    <select name="existing_conn_id" style="margin-top:.3rem">
+      <option value="">— select connection —</option>
+      {% for cc in candidates %}<option value="{{ cc.id }}">{{ cc.site.name }} / {{ cc.name }} ({{ cc.site.vendor.value }})</option>{% endfor %}
+    </select>
+    {% endif %}
+
+    <div style="margin-top:1rem;"><button class="btn">Generate both-ends configs</button></div>
+  </form>
+  {% endif %}
+</div>
+
+{% if user.role.value == 'admin' %}
+<div class="card">
+  <h3>Danger zone</h3>
+  <form method="post" action="/connections/{{ conn.id }}/delete"
+        onsubmit="return confirm('Delete connection {{ conn.name }}?');">
+    <button class="btn danger">Delete this connection</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}

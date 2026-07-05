@@ -1,18 +1,17 @@
 {% extends "base.html" %}
 {% from "_macros.html" import rated_select %}
 {% block content %}
-<h1>VPN Sites</h1>
+<h1>Sites (devices)</h1>
 <div class="card">
   <table>
-    <tr><th>Name</th><th>Vendor</th><th>Model</th><th>Source</th><th>Peer</th>
+    <tr><th>Name</th><th>Vendor</th><th>Model</th><th>Connections</th><th>Source</th>
         {% if user.role.value == 'admin' %}<th></th>{% endif %}</tr>
     {% for s in sites %}
     <tr><td><a href="/sites/{{ s.id }}">{{ s.name }}</a></td><td>{{ s.vendor.value }}</td>
-        <td>{{ s.model or '—' }}</td><td>{{ s.source }}</td>
-        <td>{% if s.peer_site_id %}<a href="/sites/{{ s.peer_site_id }}">#{{ s.peer_site_id }}</a>{% else %}—{% endif %}</td>
+        <td>{{ s.model or '—' }}</td><td>{{ counts.get(s.id, 0) }}</td><td>{{ s.source }}</td>
         {% if user.role.value == 'admin' %}
         <td><form method="post" action="/sites/{{ s.id }}/delete"
-              onsubmit="return confirm('Delete {{ s.name }}?');">
+              onsubmit="return confirm('Delete {{ s.name }} and all its connections?');">
             <button class="btn small danger">Delete</button></form></td>
         {% endif %}
     </tr>
@@ -22,27 +21,31 @@
 </div>
 
 <div class="card">
-  <h3>Generate new VPN config</h3>
-  <p class="muted">Crypto pre-filled from <a href="/admin/defaults">defaults</a>; override per field. Insecure choices are flagged in the output.</p>
+  <h3>New site + first VPN connection</h3>
+  <p class="muted">A site is a device; it can hold multiple VPN connections. Crypto is
+    pre-filled from <a href="/admin/defaults">defaults</a>. Insecure choices are flagged.</p>
   <form method="post" action="/sites/generate">
     <div class="row3">
-      <div><label>Site name</label><input name="name" required></div>
+      <div><label>Site (device) name</label><input name="name" required></div>
       <div><label>Vendor</label><select name="vendor">
         {% for v in vendors %}<option value="{{ v.value }}">{{ v.value }}</option>{% endfor %}</select></div>
       <div><label>Model</label><input name="model" placeholder="SRX300 / IX20 / IBR900"></div>
     </div>
+    <label>Connection name</label><input name="conn_name" placeholder="e.g. hq-to-dc (blank = auto)">
     <div class="row">
       <fieldset><legend>Local endpoint</legend>
         <label>Public IP</label><input name="local_ip">
         <label>IKE ID <span class="muted">(blank = auto)</span></label>
         <input name="local_id" placeholder="auto-generated from name/IP">
-        <label>Protected subnets</label><input name="local_subnets" placeholder="10.1.0.0/24, ...">
+        <label>Protected subnets *</label>
+        <input name="local_subnets" placeholder="10.1.0.0/24, ..." required>
       </fieldset>
       <fieldset><legend>Remote endpoint</legend>
-        <label>Public IP</label><input name="remote_ip">
+        <label>Public IP *</label><input name="remote_ip" required>
         <label>IKE ID <span class="muted">(blank = auto)</span></label>
         <input name="remote_id" placeholder="auto-generated from name/IP">
-        <label>Protected subnets</label><input name="remote_subnets" placeholder="10.2.0.0/24, ...">
+        <label>Protected subnets *</label>
+        <input name="remote_subnets" placeholder="10.2.0.0/24, ..." required>
       </fieldset>
     </div>
     <div class="row3">
@@ -60,9 +63,7 @@
       <div><label>P2 integrity</label>{{ rated_select('p2_integ', opts.integrity, defaults.phase2.integrity) }}</div>
       <div><label>P2 PFS group</label>{{ rated_select('p2_pfs', opts.dh_groups, defaults.phase2.pfs_group) }}</div>
     </div>
-    <label><input type="checkbox" name="make_peer" value="1" style="width:auto"> Also generate compatible peer (far-end) config</label>
-    <label>Peer name (optional)</label><input name="peer_name">
-    <button class="btn" style="margin-top:.8rem">Generate</button>
+    <button class="btn" style="margin-top:.8rem">Create site + connection</button>
   </form>
 </div>
 {% endblock %}

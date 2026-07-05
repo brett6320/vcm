@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon %}
+{% macro side(label, d) %}
+<div class="card">
+  <h3>{{ label }}: {{ d.site.name }} / {{ d.conn.name }}
+    <span class="muted">({{ d.site.vendor.value }})</span></h3>
+  {% if d.warnings %}
+    <div class="warn-box"><strong>{{ icon('warn') }} {{ d.warnings|length }} warning(s)</strong>
+      <ul>{% for w in d.warnings %}<li class="sev-{{ w.severity }}">{{ w.message }}</li>{% endfor %}</ul></div>
+  {% endif %}
+  <a class="btn small" href="/connections/{{ d.conn.id }}/config">Download</a>
+  <a class="btn small" href="/connections/{{ d.conn.id }}">Open connection</a>
+  <pre>{{ d.conn.generated_config }}</pre>
+</div>
+{% endmacro %}
+{% block content %}
+<h1>Both-ends configuration</h1>
+<div class="alert notice">{{ icon('ok') }} Crypto is mirrored across both ends — guaranteed interop.
+  Apply the near-end config to update the existing firewall and load the far-end config on the new device.</div>
+{{ side('Near end (this device)', near) }}
+{{ side('Far end (peer device)', far) }}
+{% endblock %}

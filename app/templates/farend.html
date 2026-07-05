@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon %}
+{% block content %}
+<p><a href="/connections/{{ conn.id }}">← {{ conn.name }}</a></p>
+<h1>Far-end config <span class="muted">for {{ conn.name }} on {{ site.name }}</span></h1>
+
+<div class="alert notice">{{ icon('ok') }} Generated on the fly (not saved). Crypto is mirrored
+  from the near end for guaranteed interop. To persist and pair it, use
+  <a href="/connections/{{ conn.id }}">Build far-end</a> on the connection.</div>
+
+<div class="card">
+  <form method="get" action="/connections/{{ conn.id }}/far-end" style="display:flex;gap:.6rem;align-items:end">
+    <div style="flex:0 0 240px"><label>Far-end platform</label>
+      <select name="vendor" onchange="this.form.submit()">
+        {% for v in vendors %}
+        <option value="{{ v.value }}" {% if v.value == vendor %}selected{% endif %}>{{ v.value }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <a class="btn" href="/connections/{{ conn.id }}/far-end.txt?vendor={{ vendor }}">Download</a>
+  </form>
+</div>
+
+{% if warnings %}
+<div class="warn-box"><strong>{{ icon('warn') }} {{ warnings|length }} warning(s)</strong>
+  <ul>{% for w in warnings %}<li class="sev-{{ w.severity }}">{{ w.message }}</li>{% endfor %}</ul></div>
+{% endif %}
+
+<div class="card">
+  <p class="muted">Far-end peer: {{ peer.remote.public_ip or '—' }} → local
+    {{ peer.local.public_ip or '—' }} ({{ peer.local.id }}) ·
+    Phase 1 {{ peer.phase1.encryption }}/{{ peer.phase1.integrity }}/DH{{ peer.phase1.dh_group }}</p>
+  <pre>{{ config }}</pre>
+</div>
+{% endblock %}

@@ -1,0 +1,9 @@
+# Dev overlay — publishes the app via the Docker proxy and enables dev mode.
+# Activated automatically when COMPOSE_FILE lists it (see .env.example), so a
+# plain `docker compose up` in dev exposes the port; prod (base file only) does not.
+services:
+  vcm:
+    environment:
+      VCM_MODE: "dev"
+    ports:
+      - "${VCM_DEV_PORT:-8000}:8000"
