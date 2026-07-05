@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import icon %}
 
 {% macro ca_node(n) %}
 <li>
@@ -16,7 +17,7 @@
     {% for child in n.cas %}{{ ca_node(child) }}{% endfor %}
     {% for c in n.certificates %}
     <li class="tree-leaf">
-      🖊 <a href="/pki/cert/{{ c.id }}">{{ c.subject }}</a>
+      {{ icon('cert', 14) }} <a href="/pki/cert/{{ c.id }}">{{ c.subject }}</a>
       <span class="muted">· {{ c.serial }} · {{ c.status }} · exp {{ c.not_after[:10] }}</span>
     </li>
     {% endfor %}

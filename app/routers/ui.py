@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import CertAuthority, Certificate, Site, User
+from ..models import CertAuthority, Certificate, Site, User, VpnConnection
 from ..security.deps import current_user
 from ..templates_env import render
 
@@ -19,6 +19,7 @@ def dashboard(request: Request, db: Session = Depends(get_db), user: User = Depe
         "cas": db.scalar(select(func.count()).select_from(CertAuthority)),
         "certs": db.scalar(select(func.count()).select_from(Certificate)),
         "sites": db.scalar(select(func.count()).select_from(Site)),
+        "connections": db.scalar(select(func.count()).select_from(VpnConnection)),
     }
     recent_sites = db.execute(select(Site).order_by(Site.id.desc()).limit(5)).scalars().all()
     return render(request, "dashboard.html", stats=stats, recent_sites=recent_sites)

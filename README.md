@@ -57,6 +57,14 @@ cp .env.example .env    # fill in VCM_KEK_B64 etc.
 docker compose up -d --build
 ```
 
+**Ports are automatic** (one switch in `.env`):
+
+- **Dev** — uncomment `COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml`.
+  The dev overlay publishes `${VCM_DEV_PORT:-8000}:8000` via the Docker proxy and
+  sets `VCM_MODE=dev`. Plain `docker compose up` then exposes the app locally.
+- **Prod** — leave it commented (base file only): **no published ports** — front
+  the app with a reverse proxy (`deploy/`), and `VCM_MODE` stays `prod`.
+
 Reverse-proxy overlays:
 
 ```bash

@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     environment:
       # --- REQUIRED in production ---
+      # Runtime mode: "prod" (default) forces MFA enrollment; "dev" skips it.
+      VCM_MODE: "${VCM_MODE:-prod}"
       VCM_SECRET_KEY: "${VCM_SECRET_KEY:?set a long random value}"
       VCM_KEK_B64: "${VCM_KEK_B64:?base64 of 32 random bytes; wraps CA keys}"
       # First-run admin (remove after first login enrolls MFA):
@@ -28,9 +30,9 @@ services:
       VCM_DATABASE_URL: "${VCM_DATABASE_URL:-sqlite:////data/vcm.db}"
     volumes:
       - vcm-data:/data
-    # No published ports by default — front it with a reverse proxy (see deploy/).
-    # For local testing without a proxy, uncomment:
-    ports: ["8000:8000"]
+    # No published ports in prod — front it with a reverse proxy (see deploy/).
+    # Dev port publishing is added automatically by docker-compose.dev.yml
+    # (activated via COMPOSE_FILE in .env — see .env.example).
 
   # Uncomment for Postgres:
   # db:

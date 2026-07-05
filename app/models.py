@@ -192,7 +192,7 @@ class Defaults(Base):
 
 
 class Site(Base):
-    """A VPN endpoint / firewall we have generated or imported config for."""
+    """A device / firewall. Holds one or more VPN connections (tunnels)."""
 
     __tablename__ = "sites"
 
@@ -200,15 +200,44 @@ class Site(Base):
     name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     vendor: Mapped[Vendor] = mapped_column(_enum_col(Vendor))
     model: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # Full parameter set as JSON (endpoints, proposals, subnets, PKI refs, etc.)
-    params_json: Mapped[str] = mapped_column(Text)
-    generated_config: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(16), default="generated")  # generated|imported
-    peer_site_id: Mapped[int | None] = mapped_column(ForeignKey("sites.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+    connections: Mapped[list["VpnConnection"]] = relationship(
+        back_populates="site", cascade="all, delete-orphan",
+        foreign_keys="VpnConnection.site_id",
+    )
+
+
+class VpnConnection(Base):
+    """A single VPN tunnel on a site. A site may have many."""
+
+    __tablename__ = "vpn_connections"
+    __table_args__ = (UniqueConstraint("site_id", "name", name="uq_conn_site_name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    # Full parameter set as JSON (endpoints, proposals, subnets, PKI refs, etc.)
+    params_json: Mapped[str] = mapped_column(Text)
+    generated_config: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(16), default="generated")  # generated|imported
+    # Set when an import could not be fully parsed — the shown params are not trustworthy.
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
+    review_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # The paired far-end connection (on this or another site), if built.
+    peer_connection_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vpn_connections.id"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    site: Mapped[Site] = relationship(back_populates="connections", foreign_keys=[site_id])
 
 
 class AuditLog(Base):

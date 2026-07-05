@@ -19,7 +19,13 @@
 body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
 .topbar { display: flex; align-items: center; gap: 1rem; padding: .6rem 1rem;
   background: var(--card); border-bottom: 1px solid var(--border); }
-.brand { font-weight: 700; text-decoration: none; color: var(--fg); font-size: 1.1rem; }
+.brand { font-weight: 700; text-decoration: none; color: var(--fg); font-size: 1.1rem;
+  display: inline-flex; align-items: center; gap: .45rem; }
+.brand-icon { color: var(--accent); display: block; }
+/* QR must always be dark-on-light for scanners, regardless of theme. */
+.qr-box { background: #fff; padding: 12px; border-radius: 8px; display: inline-block;
+  line-height: 0; box-shadow: 0 0 0 1px var(--border); }
+.qr-box img, .qr-box svg { display: block; width: 200px; height: 200px; }
 nav a { margin-right: .8rem; text-decoration: none; color: var(--accent); }
 .right { margin-left: auto; display: flex; align-items: center; gap: .8rem; }
 .who { color: var(--muted); font-size: .85rem; }
@@ -40,6 +46,8 @@ textarea { min-height: 120px; font-family: ui-monospace, monospace; }
   text-decoration: none; font: inherit; }
 .btn.small { padding: .3rem .6rem; font-size: .8rem; }
 .btn.danger { background: var(--danger); }
+.theme-picker { display: inline-flex; align-items: center; gap: .35rem; }
+.theme-label { color: var(--muted); font-size: .8rem; }
 .theme-picker select { width: auto; padding: .3rem; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--border);

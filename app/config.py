@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     app_name: str = "VCM — VPN & Certificate Manager"
     database_url: str = "sqlite:///./vcm.db"
 
+    # "prod" (default) enforces MFA enrollment before any privileged action.
+    # "dev" skips forced enrollment for convenience. Never use "dev" in production.
+    mode: str = "prod"
+
+    @property
+    def is_dev(self) -> bool:
+        return self.mode.lower() == "dev"
+
     # Cookie signing / session secret. MUST be set in production.
     secret_key: str = "dev-insecure-change-me"
     session_cookie: str = "vcm_session"

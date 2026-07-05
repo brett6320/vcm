@@ -1,7 +1,39 @@
+# Python
 .venv/
 __pycache__/
 *.pyc
-*.db
-.env
-vcm.db
 .pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Secrets & env (keep .env.example only)
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+kek*
+secret*
+
+# Databases / data (contain encrypted CA keys, users, sessions)
+*.db
+*.sqlite
+*.sqlite3
+vcm.db
+/data/
+
+# Claude / assistant artifacts
+.claude/
+CLAUDE.md
+.claude.md
+memory/
+scratchpad/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

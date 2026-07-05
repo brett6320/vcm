@@ -66,24 +66,278 @@ def _extract_brace_blocks(text: str, names: tuple[str, ...]) -> str:
 def detect_vendor(text: str) -> str:
     if "set security ike" in text or "set security ipsec" in text:
         return "juniper_srx"
-    if re.search(r"^\s*ipsec\s+\S+\s+", text, re.M):
-        return "digi"
+    # Structured (curly-brace) Junos: a `security { ... ike { ... } }` hierarchy.
+    if re.search(r"\bsecurity\s*{", text) and re.search(r"\n\s*ike\s*{", text):
+        return "juniper_srx"
     if "config set vpn/tunnels" in text:
         return "cradlepoint"
     if "connections {" in text or "esp_proposals" in text or "swanctl" in text:
         return "pfsense"
+    if re.search(r"^\s*ipsec\s+\S+\s+\S", text, re.M):
+        return "digi"
     return "juniper_srx"
 
 
+def is_structured_junos(text: str) -> bool:
+    return bool(re.search(r"\bsecurity\s*{", text) and re.search(r"\n\s*ike\s*{", text))
+
+
+# --------------------------------------------------------------------------- #
+# Curly-brace Junos parsing helpers
+# --------------------------------------------------------------------------- #
+def _balanced(text: str, brace_idx: int) -> str:
+    """Given the index of an opening '{', return the inner text up to its match."""
+    depth = 0
+    for i in range(brace_idx, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[brace_idx + 1:i]
+    return text[brace_idx + 1:]
+
+
+def _find_block(text: str, header: str) -> str | None:
+    """Inner text of the first `header { ... }` (header is a regex)."""
+    m = re.search(header + r"\s*{", text)
+    if not m:
+        return None
+    return _balanced(text, m.end() - 1)
+
+
+def _named_blocks(body: str, keyword: str) -> dict[str, str]:
+    """Map name -> inner text for every active `keyword <name> { ... }` in body.
+    `inactive:`-prefixed stanzas are skipped."""
+    out: dict[str, str] = {}
+    for m in re.finditer(r"(?:^|\n)([ \t]*)(inactive:\s*)?" + re.escape(keyword)
+                         + r"\s+(\S+)\s*{", body):
+        if m.group(2):  # inactive
+            continue
+        out[m.group(3)] = _balanced(body, m.end() - 1)
+    return out
+
+
+def _scalar(body: str, key: str) -> str | None:
+    m = re.search(r"\b" + re.escape(key) + r"\s+([^\s;{}]+)\s*;", body)
+    return m.group(1) if m else None
+
+
+def _norm_ipsec_auth(kw: str) -> str:
+    # hmac-sha-256-128 -> sha-256 ; hmac-sha1-96 -> sha1
+    kw = kw.lower()
+    kw = re.sub(r"^hmac-", "", kw)
+    kw = re.sub(r"-(96|128|160|192|256|384|512)$", "", kw)
+    return kw
+
+
 def import_config(text: str, name: str | None = None) -> VpnProfile:
+    """Single-connection import (kept for callers/tests). Returns the first
+    connection found."""
+    site = import_site(text, name)
+    if site["connections"]:
+        return site["connections"][0]["profile"]
+    # Fallback to legacy line-style importers.
     vendor = detect_vendor(text)
-    if vendor == "juniper_srx":
-        return _import_srx(text, name)
     if vendor == "digi":
         return _import_digi(text, name)
     if vendor == "pfsense":
         return _import_pfsense(text, name)
-    return _import_cradlepoint(text, name)
+    if vendor == "cradlepoint":
+        return _import_cradlepoint(text, name)
+    return _import_srx(text, name)
+
+
+def import_site(text: str, name: str | None = None) -> dict:
+    """Parse a device config into a site with one or more VPN connections.
+
+    Returns: {vendor, model, hostname, connections: [{profile, config, review}]}
+    where `review` is None or a reason string when parsing was incomplete.
+    """
+    vendor = detect_vendor(text)
+    if vendor == "juniper_srx" and is_structured_junos(text):
+        return _import_junos_structured(text, name)
+
+    # Single-connection line/brace-style formats.
+    if vendor == "digi":
+        profile = _import_digi(text, name)
+    elif vendor == "pfsense":
+        profile = _import_pfsense(text, name)
+    elif vendor == "cradlepoint":
+        profile = _import_cradlepoint(text, name)
+    else:
+        profile = _import_srx(text, name)
+    vpn_only = extract_vpn_sections(text, vendor)
+    review = None
+    if not profile.remote.public_ip and not profile.remote.protected_subnets:
+        review = ("Could not parse endpoint details from this config — parameters "
+                  "shown are defaults. Verify against the source before use.")
+    return {"vendor": vendor, "model": profile.model or "", "hostname": name or profile.name,
+            "connections": [{"profile": profile, "config": vpn_only or text, "review": review}]}
+
+
+# --------------------------------------------------------------------------- #
+# Structured (curly-brace) Junos SRX — one connection per `vpn` stanza
+# --------------------------------------------------------------------------- #
+def _import_junos_structured(text: str, name: str | None) -> dict:
+    v = "juniper_srx"
+    hostname = name or _scalar(text, "host-name") or "imported-srx"
+    mm = re.search(r"#\s*Model:\s*(\S+)", text, re.I)
+    model = mm.group(1) if mm else ""
+
+    security = _find_block(text, r"\bsecurity") or ""
+    ike = _find_block(security, r"\bike") or ""
+    ipsec = _find_block(security, r"\bipsec") or ""
+
+    ike_props = _named_blocks(ike, "proposal")
+    ike_pols = _named_blocks(ike, "policy")
+    gateways = _named_blocks(ike, "gateway")
+    ipsec_props = _named_blocks(ipsec, "proposal")
+    ipsec_pols = _named_blocks(ipsec, "policy")
+    vpns = _named_blocks(ipsec, "vpn")
+
+    connections = []
+    for vname, vbody in vpns.items():
+        conn = _junos_connection(v, vname, vbody, gateways, ike_pols, ike_props,
+                                 ipsec_pols, ipsec_props)
+        connections.append(conn)
+
+    return {"vendor": v, "model": model, "hostname": hostname, "connections": connections}
+
+
+def _junos_connection(v, vname, vbody, gateways, ike_pols, ike_props, ipsec_pols, ipsec_props):
+    p1, p2 = Phase1(), Phase2()
+    local, remote = Endpoint(name="local"), Endpoint(name="remote")
+    review = []
+
+    bind = _scalar(vbody, "bind-interface")
+    gwname = _scalar(vbody, "gateway")
+    ipsecpolname = _scalar(vbody, "ipsec-policy")
+
+    # proxy-identity local/remote (traffic selectors)
+    proxy = _find_block(vbody, r"proxy-identity")
+    if proxy:
+        if lm := _scalar(proxy, "local"):
+            local.protected_subnets = [lm]
+        if rm := _scalar(proxy, "remote"):
+            remote.protected_subnets = [rm]
+
+    gw = gateways.get(gwname or "", "")
+    if gw:
+        remote.public_ip = _scalar(gw, "address") or ""
+        # dynamic peers: hostname either `dynamic hostname X;` or inside dynamic { }
+        if not remote.public_ip:
+            dyn = _find_block(gw, r"dynamic")
+            hostname = _scalar(dyn, "hostname") if dyn else _dynamic_hostname(gw)
+            if hostname:
+                remote.id = hostname
+        if lid := re.search(r"local-identity\s+hostname\s+(\S+);", gw):
+            local.id = lid.group(1)
+        if rid := re.search(r"remote-identity\s+hostname\s+(\S+);", gw):
+            remote.id = rid.group(1)
+        if "v2-only" in gw:
+            p1.ike_version = "ikev2"
+        else:
+            p1.ike_version = "ikev1"
+        if dpd := _scalar(gw, "interval"):
+            try:
+                p1.dpd_seconds = int(dpd)
+            except ValueError:
+                pass
+        ikepolname = _scalar(gw, "ike-policy")
+    else:
+        ikepolname = None
+        review.append(f"gateway '{gwname}' not found")
+
+    # Phase 1 from ike policy -> proposal
+    ikepol = ike_pols.get(ikepolname or "", "")
+    if ikepol:
+        if "certificate" in ikepol:
+            p1.auth_method = "certificate"
+        ikepropname = _scalar(ikepol, "proposals")
+        prop = ike_props.get(ikepropname or "", "")
+        if prop:
+            if e := _scalar(prop, "encryption-algorithm"):
+                p1.encryption = _reverse(ENCRYPTION, v, e)
+            if a := _scalar(prop, "authentication-algorithm"):
+                p1.integrity = _reverse(INTEGRITY, v, a)
+            if d := _scalar(prop, "dh-group"):
+                p1.dh_group = _reverse(DH_GROUPS, v, d)
+            if lt := _scalar(prop, "lifetime-seconds"):
+                try:
+                    p1.lifetime_seconds = int(lt)
+                except ValueError:
+                    pass
+            if "pre-shared-keys" in prop:
+                p1.auth_method = "psk"
+            elif "rsa-signatures" in prop:
+                p1.auth_method = "certificate"
+        else:
+            review.append("ike proposal not found")
+    else:
+        review.append("ike policy not found")
+
+    # Phase 2 from ipsec policy -> proposal
+    ipsecpol = ipsec_pols.get(ipsecpolname or "", "")
+    if ipsecpol:
+        pfs = _find_block(ipsecpol, r"perfect-forward-secrecy")
+        if pfs and (k := _scalar(pfs, "keys")):
+            p2.pfs_group = _reverse(DH_GROUPS, v, k)
+        ipsecpropname = _scalar(ipsecpol, "proposals")
+        prop = ipsec_props.get(ipsecpropname or "", "")
+        if prop:
+            if e := _scalar(prop, "encryption-algorithm"):
+                p2.encryption = _reverse(ENCRYPTION, v, e)
+            if a := _scalar(prop, "authentication-algorithm"):
+                p2.integrity = _reverse(INTEGRITY, v, _norm_ipsec_auth(a))
+            if pr := _scalar(prop, "protocol"):
+                p2.protocol = pr
+    else:
+        review.append("ipsec policy not found")
+
+    profile = VpnProfile(name=vname, vendor=v, local=local, remote=remote, phase1=p1, phase2=p2)
+    # Reconstruct a focused config excerpt for this connection.
+    config = _junos_excerpt(vname, vbody, gwname, gw, ikepolname, ikepol, ipsecpolname,
+                            ipsecpol, ike_props, ipsec_props, bind)
+    return {"profile": profile, "config": config,
+            "review": "; ".join(review) if review else None}
+
+
+def _dynamic_hostname(gw: str) -> str | None:
+    m = re.search(r"dynamic\s+hostname\s+(\S+);", gw)
+    return m.group(1) if m else None
+
+
+def _junos_excerpt(vname, vbody, gwname, gw, ikepolname, ikepol, ipsecpolname, ipsecpol,
+                   ike_props, ipsec_props, bind) -> str:
+    def wrap(kind, nm, inner):
+        return f"    {kind} {nm} {{{inner}}}" if inner else ""
+
+    ikepropname = _scalar(ikepol, "proposals") if ikepol else None
+    ipsecpropname = _scalar(ipsecpol, "proposals") if ipsecpol else None
+    parts = ["security {", "  ike {"]
+    if ikepropname:
+        parts.append(wrap("proposal", ikepropname, ike_props.get(ikepropname, "")))
+    if ikepolname:
+        parts.append(wrap("policy", ikepolname, ikepol))
+    if gwname:
+        parts.append(wrap("gateway", gwname, gw))
+    parts += ["  }", "  ipsec {"]
+    if ipsecpropname:
+        parts.append(wrap("proposal", ipsecpropname, ipsec_props.get(ipsecpropname, "")))
+    if ipsecpolname:
+        parts.append(wrap("policy", ipsecpolname, ipsecpol))
+    parts.append(wrap("vpn", vname, vbody))
+    parts += ["  }", "}"]
+    return _redact("\n".join(p for p in parts if p))
+
+
+def _redact(text: str) -> str:
+    """Strip secret material that may appear in IKE stanzas before we persist it."""
+    text = re.sub(r'(pre-shared-key\s+ascii-text)\s+"?[^;"]+"?;', r"\1 <redacted>;", text)
+    text = re.sub(r'(pre-shared-key\s+hexadecimal)\s+\S+;', r"\1 <redacted>;", text)
+    text = re.sub(r'(encrypted-password)\s+"?[^;"]+"?;', r"\1 <redacted>;", text)
+    return text
 
 
 # --------------------------------------------------------------------------- #

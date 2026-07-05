@@ -48,6 +48,64 @@ def test_all_vendors_generate():
         assert cfg.strip()
 
 
+JUNOS_STRUCTURED = """# Model: srx300
+system { host-name FW-A; }
+security {
+    ike {
+        proposal P1 {
+            authentication-method rsa-signatures;
+            dh-group group20;
+            authentication-algorithm sha-256;
+            encryption-algorithm aes-256-cbc;
+        }
+        proposal P1PSK {
+            authentication-method pre-shared-keys;
+            dh-group group14; authentication-algorithm sha1; encryption-algorithm aes-128-cbc;
+        }
+        policy POLC { proposals P1; certificate { local-certificate fw; } }
+        policy POLP { proposals P1PSK; pre-shared-key ascii-text TOPSECRET; }
+        gateway GW1 { ike-policy POLC; address 203.0.113.5;
+            local-identity hostname a.example; remote-identity hostname b.example; }
+        gateway GW2 { ike-policy POLP; address 198.51.100.9; version v2-only;
+            local-identity hostname a.example; }
+    }
+    ipsec {
+        proposal IP1 { protocol esp; authentication-algorithm hmac-sha-256-128;
+            encryption-algorithm aes-256-cbc; }
+        policy IPP { perfect-forward-secrecy { keys group19; } proposals IP1; }
+        vpn TUN-A { bind-interface st0.0; ike { gateway GW1; ipsec-policy IPP; } }
+        inactive: vpn TUN-OFF { bind-interface st0.1; ike { gateway GW1; ipsec-policy IPP; } }
+        vpn TUN-B { bind-interface st0.2; ike { gateway GW2;
+            proxy-identity { local 10.1.0.0/24; remote 10.2.0.0/24; } ipsec-policy IPP; } }
+    }
+}
+"""
+
+
+def test_junos_structured_multi_connection_import():
+    from app.srx import importer
+    assert importer.detect_vendor(JUNOS_STRUCTURED) == "juniper_srx"
+    assert importer.is_structured_junos(JUNOS_STRUCTURED)
+    site = importer.import_site(JUNOS_STRUCTURED)
+    assert site["vendor"] == "juniper_srx" and site["model"] == "srx300"
+    assert site["hostname"] == "FW-A"
+    names = {c["profile"].name for c in site["connections"]}
+    assert names == {"TUN-A", "TUN-B"}          # inactive TUN-OFF excluded
+    by = {c["profile"].name: c for c in site["connections"]}
+    a = by["TUN-A"]["profile"]
+    assert a.phase1.encryption == "aes-256-cbc" and a.phase1.integrity == "sha256"
+    assert a.phase1.dh_group == "20" and a.phase1.auth_method == "certificate"
+    assert a.phase1.ike_version == "ikev1" and a.remote.public_ip == "203.0.113.5"
+    assert a.phase2.pfs_group == "19" and a.phase2.integrity == "sha256"  # hmac normalized
+    b = by["TUN-B"]["profile"]
+    assert b.phase1.auth_method == "psk" and b.phase1.ike_version == "ikev2"
+    assert b.local.protected_subnets == ["10.1.0.0/24"]
+    assert b.remote.protected_subnets == ["10.2.0.0/24"]
+    # PSK secret must never be persisted in the stored config excerpt
+    assert "TOPSECRET" not in by["TUN-B"]["config"]
+    assert "<redacted>" in by["TUN-B"]["config"]
+
+
 def test_import_extracts_only_vpn_sections():
     # SRX: VPN lines mixed with unrelated system/interface config.
     p = _mk_profile()

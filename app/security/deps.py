@@ -59,8 +59,8 @@ def current_user(request: Request, db: Session = Depends(get_db),
         raise AuthRedirect("/login")
     if user.has_mfa and not sess.mfa_ok:
         raise AuthRedirect("/mfa")
-    if not user.has_mfa:
-        # Force enrollment before any privileged action.
+    if not user.has_mfa and not get_settings().is_dev:
+        # Force enrollment before any privileged action (prod only).
         raise AuthRedirect("/mfa/enroll")
     request.state.user = user
     request.state.session = sess

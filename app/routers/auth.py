@@ -39,7 +39,13 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
         return render(request, "login.html", error="Invalid credentials")
     sess = sessions.create_session(db, user, ip, mfa_ok=not user.has_mfa)
     audit(db, request, "login.password_ok", f"user={username}", user=user)
-    resp = RedirectResponse("/mfa" if user.has_mfa else "/mfa/enroll", status_code=303)
+    if user.has_mfa:
+        target = "/mfa"
+    elif s.is_dev:
+        target = "/"  # dev mode: skip forced enrollment
+    else:
+        target = "/mfa/enroll"
+    resp = RedirectResponse(target, status_code=303)
     _set_cookie(resp, sess.id)
     return resp
 

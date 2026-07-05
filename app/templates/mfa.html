@@ -1,9 +1,10 @@
 {% extends "base.html" %}
+{% from "_macros.html" import icon %}
 {% block content %}
 <div class="card" style="max-width:420px;margin:3rem auto;">
   <h2>Multi-factor authentication</h2>
   {% if has_passkey %}
-  <button class="btn" style="width:100%" onclick="authPasskey()">🔑 Use passkey</button>
+  <button class="btn" style="width:100%" onclick="authPasskey()">{{ icon('key') }} Use passkey</button>
   <hr>
   {% endif %}
   {% if has_totp %}
