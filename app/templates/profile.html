@@ -12,6 +12,20 @@
 </div>
 
 <div class="card">
+  <h3>Contact details</h3>
+  <form method="post" action="/profile/contact">
+    <div class="row3">
+      <div><label>First name</label><input name="first_name" value="{{ user.first_name or '' }}"></div>
+      <div><label>Last name</label><input name="last_name" value="{{ user.last_name or '' }}"></div>
+      <div><label>Email</label><input type="email" name="email" value="{{ user.email or '' }}"></div>
+    </div>
+    <label>Phone (E.164, for SMS)</label>
+    <input name="phone" value="{{ user.phone or '' }}" placeholder="+15551234567">
+    <button class="btn" style="margin-top:.6rem">Save contact details</button>
+  </form>
+</div>
+
+<div class="card">
   <h3>Change password</h3>
   <form method="post" action="/profile/password">
     <label>Current password</label><input type="password" name="current" autocomplete="current-password">

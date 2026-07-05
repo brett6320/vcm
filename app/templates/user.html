@@ -8,6 +8,10 @@
     {{ 'disabled' if u.disabled else 'active' }} ·
     <strong>MFA:</strong> TOTP {{ 'yes' if u.totp_confirmed else 'no' }},
     {{ u.credentials|length }} passkey(s)</p>
+  <p class="muted"><strong>Name:</strong> {{ u.display_name }} ·
+    <strong>Email:</strong> {{ u.email or '—' }} ·
+    <strong>Phone:</strong> {{ u.phone or '—' }} ·
+    <strong>Must change password:</strong> {{ 'yes' if u.must_change_password else 'no' }}</p>
   {% if is_self %}<p class="muted">This is your own account.</p>{% endif %}
 </div>
 

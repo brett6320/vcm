@@ -22,11 +22,27 @@
   <form method="post" action="/admin/users">
     <div class="row3">
       <div><label>Username</label><input name="username" required></div>
-      <div><label>Password</label><input type="password" name="password" required></div>
+      <div><label>Temporary password</label><input type="password" name="password" required></div>
       <div><label>Role</label><select name="role">
         {% for r in roles %}<option value="{{ r.value }}">{{ r.value }}</option>{% endfor %}</select></div>
     </div>
-    <button class="btn" style="margin-top:.6rem">Create</button>
+    <div class="row3">
+      <div><label>First name</label><input name="first_name"></div>
+      <div><label>Last name</label><input name="last_name"></div>
+      <div><label>Email</label><input type="email" name="email"></div>
+    </div>
+    <div class="row">
+      <div><label>Phone (E.164, for SMS)</label><input name="phone" placeholder="+15551234567"></div>
+      <div><label>&nbsp;</label>
+        <label style="font-size:.9rem;">
+          <input type="checkbox" name="notify" value="1" style="width:auto"
+                 {% if not email_enabled %}disabled{% endif %}>
+          Email the temporary password{% if not email_enabled %} (email backend not configured){% endif %}
+        </label>
+      </div>
+    </div>
+    <p class="muted">New users must change their password at first login (before MFA).</p>
+    <button class="btn" style="margin-top:.4rem">Create</button>
   </form>
 </div>
 

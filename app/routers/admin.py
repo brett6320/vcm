@@ -9,6 +9,7 @@ from ..db import get_db
 from ..models import AuditLog, IPAllowEntry, Role, User
 from ..security.deps import audit, require_admin
 from ..security.passwords import hash_password
+from .. import notify as notify_mod
 from ..srx import defaults as defaults_svc
 from ..srx import proposals as proposals_mod
 from ..srx.proposals import catalog
@@ -21,17 +22,31 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 def admin_home(request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     users = db.execute(select(User).order_by(User.id)).scalars().all()
     ips = db.execute(select(IPAllowEntry).order_by(IPAllowEntry.id)).scalars().all()
-    return render(request, "admin.html", users=users, ips=ips, roles=list(Role))
+    return render(request, "admin.html", users=users, ips=ips, roles=list(Role),
+                  email_enabled=notify_mod.email_enabled(), sms_enabled=notify_mod.sms_enabled())
 
 
 @router.post("/users")
 def create_user(request: Request, username: str = Form(...), password: str = Form(...),
-                role: str = Form("operator"), db: Session = Depends(get_db),
+                role: str = Form("operator"), first_name: str = Form(""),
+                last_name: str = Form(""), email: str = Form(""), phone: str = Form(""),
+                notify: str = Form(""), db: Session = Depends(get_db),
                 user: User = Depends(require_admin)):
     if db.execute(select(User).where(User.username == username)).scalar_one_or_none():
         return RedirectResponse("/admin", status_code=303)
-    db.add(User(username=username, password_hash=hash_password(password), role=Role(role)))
+    u = User(username=username, password_hash=hash_password(password), role=Role(role),
+             first_name=first_name or None, last_name=last_name or None,
+             email=email or None, phone=phone or None, must_change_password=True)
+    db.add(u)
     audit(db, request, "admin.user_create", f"{username}/{role}", user=user)
+    # Optionally notify the new user of their temporary credentials.
+    if notify and email:
+        ok, detail = notify_mod.send_email(
+            email, "Your VCM account",
+            f"An account '{username}' was created for you.\n\n"
+            f"Temporary password: {password}\n\n"
+            "You will be required to change it at first login.")
+        audit(db, request, "admin.user_notify", f"{email}: {detail}", user=user)
     return RedirectResponse("/admin", status_code=303)
 
 

@@ -26,6 +26,18 @@ def profile_home(request: Request, db: Session = Depends(get_db),
                   current_sid=request.state.session.id)
 
 
+@router.post("/contact")
+def update_contact(request: Request, first_name: str = Form(""), last_name: str = Form(""),
+                   email: str = Form(""), phone: str = Form(""),
+                   db: Session = Depends(get_db), user: User = Depends(current_user)):
+    user.first_name = first_name or None
+    user.last_name = last_name or None
+    user.email = email or None
+    user.phone = phone or None
+    audit(db, request, "profile.contact_update", user=user)
+    return _ok(request, db, user, "Contact details updated")
+
+
 @router.post("/password")
 def change_password(request: Request, current: str = Form(...), new: str = Form(...),
                     confirm: str = Form(...), db: Session = Depends(get_db),
