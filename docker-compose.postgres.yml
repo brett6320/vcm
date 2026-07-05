@@ -4,7 +4,9 @@
 services:
   vcm:
     environment:
-      VCM_DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-vcm}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-vcm}"
+      # sslmode=require encrypts the app↔db link in flight (self-signed server
+      # cert below). Use verify-full + a mounted CA for cert pinning if desired.
+      VCM_DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-vcm}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-vcm}?sslmode=${POSTGRES_SSLMODE:-require}"
     depends_on:
       db:
         condition: service_healthy
@@ -12,12 +14,32 @@ services:
   db:
     image: postgres:16
     restart: unless-stopped
+    # Never expose the database through Traefik (defense-in-depth; Traefik also
+    # runs with exposedbydefault=false). It is reachable only on the internal
+    # compose network by the vcm service.
+    labels:
+      traefik.enable: "false"
     environment:
       POSTGRES_USER: "${POSTGRES_USER:-vcm}"
       POSTGRES_DB: "${POSTGRES_DB:-vcm}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
     volumes:
       - pg-data:/var/lib/postgresql/data
+    # Enable TLS: generate a self-signed server cert (outside the data dir so it
+    # doesn't block initdb) on each start, then run Postgres with ssl=on.
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        CRT=/var/lib/postgresql/server.crt
+        KEY=/var/lib/postgresql/server.key
+        openssl req -new -x509 -days 3650 -nodes -text \
+          -out "$$CRT" -keyout "$$KEY" -subj "/CN=vcm-db" 2>/dev/null
+        chown postgres:postgres "$$CRT" "$$KEY"
+        chmod 600 "$$KEY"
+        exec docker-entrypoint.sh postgres \
+          -c ssl=on -c ssl_cert_file="$$CRT" -c ssl_key_file="$$KEY"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-vcm} -d ${POSTGRES_DB:-vcm}"]
       interval: 5s

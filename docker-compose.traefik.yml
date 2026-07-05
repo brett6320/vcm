@@ -1,0 +1,61 @@
+# Traefik inclusion overlay — opt-in via COMPOSE_FILE.
+# Publishes the vcm service through an EXISTING Traefik instance using
+# label-based routing on a shared external network. No host ports are published;
+# Traefik terminates TLS and forwards to the container on :8000.
+#
+# Activate (in .env):
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.traefik.yml[:docker-compose.postgres.yml]
+# Configure (in .env):
+#   VCM_HOST=vcm.example.com
+#   TRAEFIK_NETWORK=traefik            # the external network Traefik watches
+#   VCM_TRAEFIK_IPV4=10.0.0.10         # optional static IP (unset = auto-assign)
+#   TRAEFIK_CERTRESOLVER=letsencrypt-prd
+services:
+  vcm:
+    networks:
+      default: {}
+      traefik:
+        # Optional static IP on the Traefik network. If VCM_TRAEFIK_IPV4 is unset,
+        # the value is empty and Compose omits it → Docker auto-assigns an IP.
+        ipv4_address: ${VCM_TRAEFIK_IPV4:-}
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
+
+      - traefik.http.routers.vcm.rule=Host(`${VCM_HOST:-vcm.example.com}`)
+      - traefik.http.routers.vcm.entrypoints=web
+      - traefik.http.routers.vcm.middlewares=vcm-redirect
+
+      - traefik.http.routers.vcm-https.rule=Host(`${VCM_HOST:-vcm.example.com}`)
+      - traefik.http.routers.vcm-https.tls=true
+      - traefik.http.routers.vcm-https.entrypoints=websecure
+      - traefik.http.routers.vcm-https.service=vcm
+      - traefik.http.routers.vcm-https.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt-prd}
+      - traefik.http.routers.vcm-https.middlewares=vcm-security
+
+      - traefik.http.middlewares.vcm-redirect.redirectscheme.scheme=https
+      - traefik.http.middlewares.vcm-redirect.redirectscheme.permanent=false
+
+      # HSTS + secure headers on the HTTPS router (in-flight hardening).
+      - traefik.http.middlewares.vcm-security.headers.forceSTSHeader=true
+      - traefik.http.middlewares.vcm-security.headers.stsSeconds=63072000
+      - traefik.http.middlewares.vcm-security.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.vcm-security.headers.stsPreload=true
+      - traefik.http.middlewares.vcm-security.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.vcm-security.headers.frameDeny=true
+      - traefik.http.middlewares.vcm-security.headers.browserXssFilter=true
+      - traefik.http.middlewares.vcm-security.headers.referrerPolicy=strict-origin-when-cross-origin
+
+      - traefik.http.services.vcm.loadbalancer.server.port=8000
+    environment:
+      # WebAuthn + secure cookies must match the public HTTPS origin.
+      VCM_RP_ID: "${VCM_HOST:-vcm.example.com}"
+      VCM_RP_ORIGIN: "https://${VCM_HOST:-vcm.example.com}"
+      VCM_COOKIE_SECURE: "true"
+      # Trust the Traefik proxy for real client IP (adjust to your proxy subnet).
+      VCM_REAL_IP_HEADERS: "${VCM_REAL_IP_HEADERS:-x-forwarded-for}"
+
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik}
