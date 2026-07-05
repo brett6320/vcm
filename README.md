@@ -1,5 +1,9 @@
 # VCM — VPN & Certificate Manager
 
+[![CI](https://github.com/brett6320/vcm/actions/workflows/ci.yml/badge.svg)](https://github.com/brett6320/vcm/actions/workflows/ci.yml)
+[![Release](https://github.com/brett6320/vcm/actions/workflows/release.yml/badge.svg)](https://github.com/brett6320/vcm/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/brett6320/vcm?sort=semver)](https://github.com/brett6320/vcm/releases/latest)
+
 MFA-protected web app to run a PKI for VPN appliances and generate/validate
 IPSec VPN configurations for **Juniper SRX (200–300 series)**, **Digi**,
 **Cradlepoint**, and **pfSense** (strongSwan) devices.
