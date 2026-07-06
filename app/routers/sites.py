@@ -70,8 +70,16 @@ def _sites_page(request: Request, db: Session, **extra):
     d = defaults_svc.get_defaults(db)
     default_vendor = list(Vendor)[0].value
     return render(request, "sites.html", sites=rows, counts=counts, vendors=generatable_vendors(),
-                  defaults=d, vopts=proposals.vendor_options(default_vendor),
+                  all_vendors=list(Vendor), defaults=d,
+                  vopts=proposals.vendor_options(default_vendor),
                   vendor_catalog=_vendor_catalog(), default_vendor=default_vendor, **extra)
+
+
+def _apply_interfaces(profile, tunnel_interface, wan_interface, tunnel_ip, remote_vendor):
+    profile.tunnel_interface = (tunnel_interface or "").strip()
+    profile.wan_interface = (wan_interface or "").strip()
+    profile.tunnel_ip = (tunnel_ip or "").strip()
+    profile.remote_vendor = (remote_vendor or "").strip()
 
 
 def _bgp_from_form(bgp_enabled, bgp_local_as, bgp_peer_as, bgp_peer_ip, bgp_local_ip,
@@ -142,6 +150,8 @@ def generate_site(request: Request,
                   bgp_enabled: str = Form(""), bgp_local_as: str = Form(""),
                   bgp_peer_as: str = Form(""), bgp_peer_ip: str = Form(""),
                   bgp_local_ip: str = Form(""), bgp_networks: str = Form(""),
+                  tunnel_interface: str = Form(""), wan_interface: str = Form(""),
+                  tunnel_ip: str = Form(""), remote_vendor: str = Form(""),
                   db: Session = Depends(get_db), user: User = Depends(current_user)):
     errors = _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method, psk, local_ip)
     if errors:
@@ -158,6 +168,7 @@ def generate_site(request: Request,
                                        p2_enc, p2_integ, p2_pfs)
     profile.bgp = _bgp_from_form(bgp_enabled, bgp_local_as, bgp_peer_as, bgp_peer_ip,
                                  bgp_local_ip, bgp_networks)
+    _apply_interfaces(profile, tunnel_interface, wan_interface, tunnel_ip, remote_vendor)
     conn = VpnConnection(site_id=site.id, name=cname, source="generated", params_json="{}")
     _save_profile(conn, site, profile)
     db.add(conn)
@@ -212,7 +223,7 @@ def site_detail(site_id: int, request: Request, db: Session = Depends(get_db),
         conns.append({"c": c, "warnings": all_warnings(prof), "p": prof.to_dict()})
     d = defaults_svc.get_defaults(db)
     return render(request, "site.html", site=site, conns=conns, defaults=d,
-                  vopts=proposals.vendor_options(site.vendor.value))
+                  vopts=proposals.vendor_options(site.vendor.value), all_vendors=list(Vendor))
 
 
 @router.post("/{site_id}/connections")
@@ -228,6 +239,8 @@ def add_connection(site_id: int, request: Request,
                    bgp_enabled: str = Form(""), bgp_local_as: str = Form(""),
                    bgp_peer_as: str = Form(""), bgp_peer_ip: str = Form(""),
                    bgp_local_ip: str = Form(""), bgp_networks: str = Form(""),
+                   tunnel_interface: str = Form(""), wan_interface: str = Form(""),
+                   tunnel_ip: str = Form(""), remote_vendor: str = Form(""),
                    db: Session = Depends(get_db), user: User = Depends(current_user)):
     site = db.get(Site, site_id)
     if not site:
@@ -242,6 +255,7 @@ def add_connection(site_id: int, request: Request,
                                        p1_dh, p1_ver, p2_enc, p2_integ, p2_pfs)
     profile.bgp = _bgp_from_form(bgp_enabled, bgp_local_as, bgp_peer_as, bgp_peer_ip,
                                  bgp_local_ip, bgp_networks)
+    _apply_interfaces(profile, tunnel_interface, wan_interface, tunnel_ip, remote_vendor)
     conn = VpnConnection(site_id=site.id, name=cname, source="generated", params_json="{}")
     _save_profile(conn, site, profile)
     db.add(conn)
@@ -307,6 +321,7 @@ def _far_end_profile(conn: VpnConnection, vendor: str | None) -> VpnProfile:
     profile = _profile(conn)
     peer = profile.mirror(f"{profile.name}-peer")
     peer.vendor = vendor or conn.site.vendor.value
+    peer.remote_vendor = conn.site.vendor.value  # the near device is the peer's far end
     suggest.fill_ike_ids(peer)
     return peer
 

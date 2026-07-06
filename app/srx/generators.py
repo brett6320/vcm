@@ -10,6 +10,15 @@ from .model import VpnProfile
 from .proposals import DH_GROUPS, ENCRYPTION, INTEGRITY, vendor_kw
 
 
+# Platforms that negotiate specific traffic selectors / proxy-IDs (policy-based).
+# A route-based SRX peering with these needs matching traffic-selectors.
+POLICY_BASED_PEERS = {"aws", "azure", "cisco_firepower", "mikrotik", "digi"}
+
+
+def is_policy_based(vendor: str) -> bool:
+    return vendor in POLICY_BASED_PEERS
+
+
 def generate(profile: VpnProfile) -> str:
     fn = _REGISTRY.get(profile.vendor)
     if not fn:
@@ -33,7 +42,8 @@ def gen_juniper_srx(p: VpnProfile) -> str:
     int2 = vendor_kw(INTEGRITY, p.phase2.integrity, v)
     pfs = vendor_kw(DH_GROUPS, p.phase2.pfs_group, v)
     n = p.name
-    st0 = f"st0.{p.st0_unit}"
+    st0 = p.tunnel_interface or f"st0.{p.st0_unit}"
+    wan = p.wan_interface or "ge-0/0/0"
 
     lines = [f"# ---- Juniper SRX IPsec VPN: {n} ----"]
     # IKE proposal
@@ -62,7 +72,7 @@ def gen_juniper_srx(p: VpnProfile) -> str:
     lines += [
         f"set security ike gateway gw-{n} ike-policy ike-pol-{n}",
         f"set security ike gateway gw-{n} address {p.remote.public_ip}",
-        f"set security ike gateway gw-{n} external-interface ge-0/0/0",
+        f"set security ike gateway gw-{n} external-interface {wan}",
         f"set security ike gateway gw-{n} version "
         + ("v2-only" if p.phase1.ike_version == "ikev2" else "v1-only"),
         f"set security ike gateway gw-{n} dead-peer-detection interval {p.phase1.dpd_seconds}",
@@ -95,14 +105,35 @@ def gen_juniper_srx(p: VpnProfile) -> str:
         f"set security ipsec vpn vpn-{n} ike ipsec-policy ipsec-pol-{n}",
         f"set security ipsec vpn vpn-{n} establish-tunnels immediately",
     ]
-    # st0 interface + zones + routes
-    lines.append(f"set interfaces {st0} family inet")
+    # st0 interface (+ optional IP) + routes
+    if p.tunnel_ip:
+        lines.append(f"set interfaces {st0} family inet address {p.tunnel_ip}")
+    else:
+        lines.append(f"set interfaces {st0} family inet")
     for subnet in p.remote.protected_subnets:
         lines.append(f"set routing-options static route {subnet} next-hop {st0}")
-    # Proxy IDs (traffic selectors)
-    for i, (l, r) in enumerate(_pairs(p.local.protected_subnets, p.remote.protected_subnets)):
-        lines.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} local-ip {l}")
-        lines.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} remote-ip {r}")
+    # Traffic selectors (proxy-IDs) are only required when the far end is
+    # policy-based (e.g. AWS/Azure/Cisco/MikroTik/Digi). Route-based peers
+    # negotiate 0.0.0.0/0 and rely on st0 routing, so we omit them there.
+    if is_policy_based(p.remote_vendor):
+        for i, (l, r) in enumerate(_pairs(p.local.protected_subnets,
+                                          p.remote.protected_subnets)):
+            lines.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} local-ip {l}")
+            lines.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} remote-ip {r}")
+        lines.append(f"# Traffic-selectors included: far end ({p.remote_vendor}) is "
+                     "policy-based and must match these proxy-IDs.")
+    elif p.remote_vendor:
+        lines.append(f"# Far end ({p.remote_vendor}) is route-based; traffic-selectors "
+                     "not required (st0 routing). Add proxy-identity only if the peer "
+                     "negotiates specific traffic selectors.")
+    else:
+        # Unknown peer platform — include selectors as the safe default.
+        for i, (l, r) in enumerate(_pairs(p.local.protected_subnets,
+                                          p.remote.protected_subnets)):
+            lines.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} local-ip {l}")
+            lines.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} remote-ip {r}")
+        lines.append("# Far-end platform not specified; traffic-selectors included as a "
+                     "safe default. Set the far-end platform to tailor this.")
     return _annotate(p, "\n".join(lines))
 
 
@@ -307,11 +338,12 @@ def gen_fortinet(p: VpnProfile) -> str:
     pfs = vendor_kw(DH_GROUPS, p.phase2.pfs_group, v)
     cert = p.phase1.auth_method == "certificate"
 
+    wan = p.wan_interface or "wan1"
     lines = [f"# ---- FortiGate IPsec VPN: {n} ----",
              "config vpn ipsec phase1-interface",
              f'    edit "{n}"',
              '        set type static',
-             '        set interface "wan1"',
+             f'        set interface "{wan}"',
              f"        set ike-version {'2' if p.phase1.ike_version == 'ikev2' else '1'}",
              f"        set remote-gw {p.remote.public_ip}",
              f"        set proposal {prop1}",
@@ -336,6 +368,9 @@ def gen_fortinet(p: VpnProfile) -> str:
     lines += [f"        set src-subnet {_ip_mask(l)}",
               f"        set dst-subnet {_ip_mask(r)}",
               "    next", "end"]
+    if p.tunnel_ip:
+        lines += ["config system interface", f'    edit "{n}"',
+                  f"        set ip {_ip_mask(p.tunnel_ip)}", "    next", "end"]
     return _annotate(p, "\n".join(lines))
 
 
@@ -349,6 +384,8 @@ def gen_palo_alto(p: VpnProfile) -> str:
     ipsecp = f"{n}-ipsec"
     gw = f"{n}-gw"
     ver = "ikev2" if p.phase1.ike_version == "ikev2" else "ikev1"
+    wan = p.wan_interface or "ethernet1/1"
+    tun = p.tunnel_interface or "tunnel.1"
     b = "set network ike crypto-profiles"
     lines = [f"# ---- Palo Alto (PAN-OS) IPsec VPN: {n} ----",
              f"{b} ike-crypto-profiles {ikep} hash {vendor_kw(INTEGRITY, p.phase1.integrity, v)}",
@@ -362,7 +399,7 @@ def gen_palo_alto(p: VpnProfile) -> str:
              f"set network ike gateway {gw} protocol version {ver}",
              f"set network ike gateway {gw} protocol {ver} ike-crypto-profile {ikep}",
              f"set network ike gateway {gw} peer-address ip {p.remote.public_ip}",
-             f"set network ike gateway {gw} local-address interface ethernet1/1"]
+             f"set network ike gateway {gw} local-address interface {wan}"]
     if p.phase1.auth_method == "certificate":
         lines.append(f"set network ike gateway {gw} local-id type fqdn id {p.local.id or n}")
         lines.append(f"set network ike gateway {gw} authentication certificate local-certificate {n}-local")
@@ -370,7 +407,9 @@ def gen_palo_alto(p: VpnProfile) -> str:
         lines.append(f"set network ike gateway {gw} authentication pre-shared-key key {p.psk or 'CHANGE-ME'}")
     lines += [f"set network tunnel ipsec {n} auto-key ike-gateway {gw}",
               f"set network tunnel ipsec {n} auto-key ipsec-crypto-profile {ipsecp}",
-              f"set network tunnel ipsec {n} tunnel-interface tunnel.1"]
+              f"set network tunnel ipsec {n} tunnel-interface {tun}"]
+    if p.tunnel_ip:
+        lines.append(f"set network interface tunnel units {tun} ip {p.tunnel_ip}")
     return _annotate(p, "\n".join(lines))
 
 
@@ -413,7 +452,7 @@ def gen_cisco_firepower(p: VpnProfile) -> str:
         lines.append(f"crypto map {n}_map 10 set pfs {_pan_group(pfs)}")
     else:
         lines.append(f"crypto map {n}_map 10 set ikev1 transform-set {n}")
-    lines += [f"crypto map {n}_map interface outside",
+    lines += [f"crypto map {n}_map interface {p.wan_interface or 'outside'}",
               f"tunnel-group {peer} type ipsec-l2l",
               f"tunnel-group {peer} ipsec-attributes"]
     if p.phase1.auth_method == "certificate":

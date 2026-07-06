@@ -55,6 +55,11 @@ class VpnProfile:
     phase2: Phase2 = field(default_factory=Phase2)
     psk: str = ""               # only if auth_method == psk (not recommended)
     bgp: Bgp = field(default_factory=Bgp)
+    # Interfaces (used where a platform requires them). Blank => vendor default.
+    tunnel_interface: str = ""  # e.g. st0.0 (SRX), tunnel.1 (Palo)
+    wan_interface: str = ""     # e.g. ge-0/0/0 (SRX), wan1 (Forti), ethernet1/1 (Palo)
+    tunnel_ip: str = ""         # optional IP/CIDR on the tunnel interface (route-based)
+    remote_vendor: str = ""     # far-end platform hint (drives SRX traffic-selectors)
     # PKI references — which local cert/CA chain the device presents.
     local_cert_id: int | None = None
     ca_id: int | None = None
@@ -70,6 +75,10 @@ class VpnProfile:
             local=Endpoint(**d.get("local", {})), remote=Endpoint(**d.get("remote", {})),
             phase1=Phase1(**d.get("phase1", {})), phase2=Phase2(**d.get("phase2", {})),
             psk=d.get("psk", ""), bgp=Bgp(**d.get("bgp", {})),
+            tunnel_interface=d.get("tunnel_interface", ""),
+            wan_interface=d.get("wan_interface", ""),
+            tunnel_ip=d.get("tunnel_ip", ""),
+            remote_vendor=d.get("remote_vendor", ""),
             local_cert_id=d.get("local_cert_id"),
             ca_id=d.get("ca_id"), st0_unit=d.get("st0_unit", 0),
         )
@@ -81,6 +90,8 @@ class VpnProfile:
         m.name = new_name
         m.local, m.remote = m.remote, m.local
         m.local_cert_id, m.ca_id = None, self.ca_id
+        # Interfaces/tunnel IP are device-specific — clear for the far end.
+        m.tunnel_interface = m.wan_interface = m.tunnel_ip = ""
         # Mirror BGP: swap ASNs and neighbor/local addresses for the far end.
         if m.bgp.enabled:
             m.bgp.local_as, m.bgp.peer_as = self.bgp.peer_as, self.bgp.local_as
