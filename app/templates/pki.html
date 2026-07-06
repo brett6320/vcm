@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "_macros.html" import icon %}
 
-{% macro ca_node(n) %}
+{% macro ca_node(n, admin=false) %}
 <li>
   <div class="tree-ca">
     <span class="badge badge-{{ n.ca_type }}">{{ n.ca_type }}</span>
@@ -11,10 +11,23 @@
       · exp {{ n.not_after[:10] }}</span>
     <a class="tree-link" href="/pki/ca/{{ n.id }}/cert">cert</a>
     <a class="tree-link" href="/pki/ca/{{ n.id }}/chain">chain</a>
+    {% if admin %}
+    <details class="ca-del">
+      <summary class="tree-link danger-link">delete</summary>
+      <form method="post" action="/pki/ca/{{ n.id }}/delete" class="ca-del-form"
+            onsubmit="return confirm('Permanently delete CA {{ n.name }} and its private key? This cannot be undone.');">
+        <span class="muted">Type <code>{{ n.name }}</code> to confirm.</span>
+        <input name="confirm_name" autocomplete="off" placeholder="{{ n.name }}" required>
+        <label class="inline"><input type="checkbox" name="cascade" value="1" style="width:auto">
+          Also delete all sub-CAs and issued certificates under it</label>
+        <button class="btn small danger">Delete CA</button>
+      </form>
+    </details>
+    {% endif %}
   </div>
   {% if n.cas or n.certificates %}
   <ul>
-    {% for child in n.cas %}{{ ca_node(child) }}{% endfor %}
+    {% for child in n.cas %}{{ ca_node(child, admin) }}{% endfor %}
     {% for c in n.certificates %}
     <li class="tree-leaf">
       {{ icon('cert', 14) }} <a href="/pki/cert/{{ c.id }}">{{ c.subject }}</a>
@@ -37,7 +50,7 @@
   </div>
   {% if hierarchy %}
   <ul class="pki-tree">
-    {% for root in hierarchy %}{{ ca_node(root) }}{% endfor %}
+    {% for root in hierarchy %}{{ ca_node(root, user and user.role.value == 'admin') }}{% endfor %}
   </ul>
   <p class="muted">Public certificates only — CA private keys are never included.</p>
   {% else %}
