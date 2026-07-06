@@ -38,6 +38,27 @@ def ensure_aware(dt: datetime) -> datetime:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
+# Expiry classification thresholds (in days). A cert expiring within
+# CRITICAL_DAYS is critical; within WARNING_DAYS is a warning; already past
+# not_after is expired; anything further out is ok.
+EXPIRY_CRITICAL_DAYS = 30
+EXPIRY_WARNING_DAYS = 90
+
+
+def classify_expiry(not_after: datetime, now: datetime | None = None) -> str:
+    """Return one of 'expired' | 'critical' | 'warning' | 'ok' for a not_after
+    instant relative to `now` (defaults to current UTC). Timezone-aware."""
+    now = now or utcnow()
+    delta_days = (ensure_aware(not_after) - ensure_aware(now)).total_seconds() / 86400.0
+    if delta_days < 0:
+        return "expired"
+    if delta_days <= EXPIRY_CRITICAL_DAYS:
+        return "critical"
+    if delta_days <= EXPIRY_WARNING_DAYS:
+        return "warning"
+    return "ok"
+
+
 class Role(str, enum.Enum):
     operator = "operator"
     admin = "admin"
@@ -260,7 +281,8 @@ class Certificate(Base):
     __tablename__ = "certificates"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    ca_id: Mapped[int] = mapped_column(ForeignKey("cert_authorities.id"))
+    # Nullable: imported/observed leaf certs have no issuing CA in this manager.
+    ca_id: Mapped[int | None] = mapped_column(ForeignKey("cert_authorities.id"), nullable=True)
     site_id: Mapped[int | None] = mapped_column(ForeignKey("sites.id"), nullable=True)
     serial: Mapped[str] = mapped_column(String(64), index=True)
     subject_dn: Mapped[str] = mapped_column(String(512))
@@ -268,13 +290,37 @@ class Certificate(Base):
     cert_pem: Mapped[str] = mapped_column(Text)
     csr_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[CertStatus] = mapped_column(_enum_col(CertStatus), default=CertStatus.active)
+    # Managed = issued/controlled by this VCM instance (can renew/revoke). Imported
+    # leaf certs are observed only: tracked for expiry but not managed.
+    managed: Mapped[bool] = mapped_column(Boolean, default=True)
+    source: Mapped[str] = mapped_column(String(16), default="issued")  # issued|imported
+    # Links an observed cert to the managed cert that supersedes it on renewal.
+    # A superseded cert drops out of the expiry warnings.
+    replaced_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("certificates.id"), nullable=True
+    )
     # Delete-protection: a locked cert must be unlocked before it can be deleted.
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    ca: Mapped[CertAuthority] = relationship()
+    ca: Mapped[CertAuthority | None] = relationship()
+    replaced_by: Mapped["Certificate | None"] = relationship(remote_side=[id])
+
+    @property
+    def expiry_status(self) -> str:
+        """'expired' | 'critical' | 'warning' | 'ok' from not_after vs now."""
+        return classify_expiry(self.not_after)
+
+    @property
+    def days_until_expiry(self) -> int:
+        """Whole days until expiry; negative once expired."""
+        return (ensure_aware(self.not_after) - utcnow()).days
+
+    @property
+    def is_superseded(self) -> bool:
+        return self.replaced_by_id is not None
 
 
 # --------------------------------------------------------------------------- #
