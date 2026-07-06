@@ -14,7 +14,7 @@ import copy
 
 from ..srx import defaults as defaults_svc
 from ..srx import diff as diff_svc
-from ..srx import generators, importer, proposals, rename as rename_mod, suggest
+from ..srx import generators, importer, interop, proposals, rename as rename_mod, suggest
 from ..srx.model import Bgp, Endpoint, Phase1, Phase2, VpnProfile, all_warnings
 from ..templates_env import render
 
@@ -537,6 +537,11 @@ def connection_detail(conn_id: int, request: Request, fmt: str = "orig",
         m.vendor = far_vendor
         suggest.fill_ike_ids(m)
         far_raw = generators.generate(m)
+    # Interop check between the two ends (imported side is authoritative).
+    interop_issues = []
+    if peer:
+        interop_issues = interop.mismatches(
+            profile, _profile(peer), near_is_import=(conn.source == "imported"))
     sides = {
         "this_label": f"{conn.site.name} / {conn.name} ({conn.site.vendor.label})",
         "this_config": _fmt_config(this_vendor, conn.generated_config, fmt),
@@ -551,7 +556,8 @@ def connection_detail(conn_id: int, request: Request, fmt: str = "orig",
                   sites=db.execute(select(Site).order_by(Site.name)).scalars().all(),
                   vendors=generatable_vendors(), peer_suggest=mirror.to_dict(),
                   suggestions=(_suggest_peers(db, conn, profile) if not peer else []),
-                  bgp_suggest=bgp_suggest, sides=sides, fmt=fmt)
+                  bgp_suggest=bgp_suggest, sides=sides, fmt=fmt,
+                  interop_issues=interop_issues)
 
 
 def _same_tunnel_subnet(a: str, b: str) -> bool:
