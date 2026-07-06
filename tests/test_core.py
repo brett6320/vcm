@@ -317,6 +317,7 @@ def test_pfsense_gui_output():
     assert "VPN > IPsec > Tunnels" in cfg
     assert "Key Exchange version : IKEv2" in cfg
     assert "Encryption Algorithm : AES256-GCM" in cfg   # AEAD, no separate hash
+    assert "Key length: 128 bits (ICV)" in cfg          # GCM ICV length present
     assert "DH Group             : 20" in cfg
     assert "Interface            : WAN" in cfg
     # CBC shows key length + hash
