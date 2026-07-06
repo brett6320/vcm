@@ -859,3 +859,28 @@ def test_load_material_p12_and_pem():
     assert k2.startswith("-----BEGIN PRIVATE KEY")
     c3, k3 = material.load_material("c.pem", cert.public_bytes(serialization.Encoding.PEM), None)
     assert c3.startswith("-----BEGIN CERTIFICATE") and k3 is None
+
+
+def test_create_ca_under_keyless_parent_errors_cleanly():
+    # Importing a root cert-only (no key), then creating a child under it must
+    # raise a clear error — not blow up decrypting an empty key blob.
+    import pytest
+    from app.db import SessionLocal
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority
+    with SessionLocal() as db:
+        db.query(CertAuthority).delete()
+        db.commit()
+        # Build a self-signed root and import it WITHOUT its key.
+        root = ca_ops.create_ca(db, name="realroot", dn={"CN": "Real Root"},
+                                ca_type=CAType.root, key_type="ec",
+                                key_params="secp256r1", valid_days=3650)
+        cert_pem = root.cert_pem
+        db.query(CertAuthority).delete()
+        db.commit()
+        keyless = ca_ops.import_ca(db, name="offline", cert_pem=cert_pem, key_pem=None)
+        assert not keyless.has_private_key
+        with pytest.raises(ValueError, match="no private key"):
+            ca_ops.create_ca(db, name="sub", dn={"CN": "Sub"}, ca_type=CAType.intermediate,
+                             key_type="ec", key_params="secp256r1", valid_days=365,
+                             parent=keyless)

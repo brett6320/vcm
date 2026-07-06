@@ -44,9 +44,14 @@ def create_ca(request: Request, name: str = Form(...), cn: str = Form(...),
               db: Session = Depends(get_db), user: User = Depends(require_admin)):
     parent = db.get(CertAuthority, int(parent_id)) if parent_id else None
     dn = {"CN": cn, "O": org, "C": country}
-    ca = ca_ops.create_ca(db, name=name, dn={k: v for k, v in dn.items() if v},
-                          ca_type=CAType(ca_type), key_type=key_type, key_params=key_params,
-                          valid_days=valid_days, parent=parent)
+    try:
+        ca = ca_ops.create_ca(db, name=name, dn={k: v for k, v in dn.items() if v},
+                              ca_type=CAType(ca_type), key_type=key_type, key_params=key_params,
+                              valid_days=valid_days, parent=parent)
+    except (ValueError, TypeError) as e:
+        cas = db.execute(select(CertAuthority).order_by(CertAuthority.id)).scalars().all()
+        return render(request, "pki.html", error=f"Create CA failed: {e}", cas=cas, certs=[],
+                      ca_types=list(CAType), hierarchy=ca_ops.build_hierarchy(db))
     audit(db, request, "pki.ca_create", f"{ca.ca_type.value}:{name}", user=user)
     return RedirectResponse("/pki", status_code=303)
 

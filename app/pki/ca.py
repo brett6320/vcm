@@ -69,6 +69,11 @@ def create_ca(
         raise ValueError("Intermediate/issuing CA requires a parent CA")
     if ca_type == CAType.root and parent is not None:
         raise ValueError("Root CA cannot have a parent")
+    if parent is not None and not parent.key_enc:
+        raise ValueError(
+            f"Parent CA '{parent.name}' has no private key available to sign — "
+            "it was imported cert-only. Import its key or choose another parent."
+        )
 
     key = keys.generate_key(key_type, key_params)
     subject = _name_from_dn(dn)
