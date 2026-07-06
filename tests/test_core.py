@@ -2181,3 +2181,21 @@ def test_interop_mismatch_flags_and_remediates():
     enc = [m for m in iss if m["field"] == "Phase 1 encryption"][0]
     assert enc["severity"] == "mismatch" and "far end" in enc["remediation"]
     assert "aes-256-cbc" in enc["remediation"]  # keep the imported value
+
+
+def test_junos_set_curly_roundtrip_and_view_consistency():
+    from app.srx.importer import junos_curly_to_set, junos_set_to_curly
+    setcfg = ("set security ike gateway gw ike-policy POL\n"
+              "set security ike gateway gw address 203.0.113.1\n"
+              "set interfaces st0 unit 5 family inet address 169.254.0.1/30\n")
+    curly = junos_set_to_curly(setcfg)
+    assert "{" in curly and "address 169.254.0.1/30;" in curly
+    # set -> curly -> set is lossless.
+    assert junos_curly_to_set(curly).strip() == setcfg.strip()
+
+    # Mixed inputs converge to the SAME format both ways.
+    from app.routers.sites import _fmt_config
+    curly_in = "security {\n    ike {\n        gateway gw { address 1.1.1.1; }\n    }\n}\n"
+    set_in = "set security ike gateway gw address 1.1.1.1\n"
+    assert _fmt_config("juniper_srx", curly_in, "set") == _fmt_config("juniper_srx", set_in, "set")
+    assert _fmt_config("juniper_srx", curly_in, "curly") == _fmt_config("juniper_srx", set_in, "curly")
