@@ -77,7 +77,7 @@
 
 <div class="card">
   <h3>Import existing CA</h3>
-  <form method="post" action="/pki/ca/import">
+  <form method="post" action="/pki/ca/import" enctype="multipart/form-data">
     <div class="row">
       <div><label>Name</label><input name="name" required></div>
       <div><label>Type <span class="muted">(blank = auto-detect)</span></label>
@@ -85,6 +85,14 @@
         {% for t in ca_types %}<option value="{{ t.value }}">{{ t.value }}</option>{% endfor %}</select>
       </div>
     </div>
+    <div class="row">
+      <div><label>Upload file <span class="muted">— PEM or PKCS#12 (.p12/.pfx)</span></label>
+        <input type="file" name="cert_file" accept=".pem,.crt,.cer,.p12,.pfx"></div>
+      <div><label>PKCS#12 password <span class="muted">(if the .p12 is encrypted)</span></label>
+        <input type="password" name="p12_password" autocomplete="off"></div>
+    </div>
+    <p class="muted">A .p12/.pfx bundles the cert and key together. For PEM, either
+      upload a bundle or paste below. An uploaded file overrides the pasted fields.</p>
     <label>CA certificate (PEM)</label>
     <textarea name="cert_pem" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
     <label>CA private key (PEM) <span class="muted">— required to issue certs; omit for cert-only (offline key)</span></label>
