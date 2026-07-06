@@ -37,3 +37,6 @@ scratchpad/
 .DS_Store
 .idea/
 .vscode/
+
+# Local, untracked operator config (API tokens, URLs) — never commit
+.local/
