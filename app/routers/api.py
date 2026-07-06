@@ -40,14 +40,37 @@ def _token_public(t: ApiToken) -> dict:
             "revoked": t.revoked}
 
 
+_SECRET_RE = [
+    (r'(pre-shared-key ascii-text\s+")[^"]*(")', r'\1<redacted>\2'),
+    (r'(set psksecret\s+")[^"]*(")', r'\1<redacted>\2'),
+    (r'(secret\s*=\s*")[^"]*(")', r'\1<redacted>\2'),
+    (r'(pre[-_ ]?shared[-_ ]?key\S*\s+)\S+', r'\1<redacted>'),
+]
+
+
+def _redact_config(cfg: str | None, psk: str | None) -> str | None:
+    """Strip any PSK from generated config before it leaves via the API."""
+    import re
+    out = cfg or ""
+    if psk:
+        out = out.replace(psk, "<redacted>")
+    for pat, repl in _SECRET_RE:
+        out = re.sub(pat, repl, out, flags=re.IGNORECASE)
+    return out
+
+
 def _conn_public(c: VpnConnection) -> dict:
     profile = VpnProfile.from_dict(json.loads(c.params_json))
+    params = profile.to_dict()
+    # Never expose PSKs / shared secrets via the API — redact from params + config.
+    had_psk = bool(params.get("psk"))
+    params["psk"] = ""
     return {"id": c.id, "name": c.name, "source": c.source,
             "needs_review": c.needs_review, "review_note": c.review_note,
             "peer_connection_id": c.peer_connection_id,
-            "params": profile.to_dict(),
+            "params": params, "psk_set": had_psk,
             "warnings": all_warnings(profile),
-            "generated_config": c.generated_config}
+            "generated_config": _redact_config(c.generated_config, profile.psk)}
 
 
 def _cert_public(c: Certificate) -> dict:

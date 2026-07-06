@@ -1995,3 +1995,50 @@ def test_api_token_per_token_ip_restriction():
             db.query(ApiToken).filter_by(token_hash=hash_token(tok)).one().allowed_ips = "127.0.0.0/8"
             db.commit()
         assert c.get("/api/whoami", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
+
+
+def test_api_never_exposes_psk_or_token_hash():
+    import json
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, Site, Vendor, VpnConnection, ApiToken
+    from app.srx.model import VpnProfile, Endpoint
+    from app.security.passwords import hash_password
+    from app.security.apitokens import hash_token
+
+    SECRET = "SuperSecretPSK123"
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="secusr").first():
+                db.add(User(username="secusr", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+            s = Site(name="SecSite", vendor=Vendor.juniper_srx, source="test")
+            db.add(s); db.flush()
+            prof = VpnProfile(name="sec", vendor="juniper_srx",
+                              local=Endpoint("l", "1.1.1.1", "", ["10.1.0.0/24"]),
+                              remote=Endpoint("r", "2.2.2.2", "", ["10.2.0.0/24"]),
+                              psk=SECRET)
+            prof.phase1.auth_method = "psk"
+            from app.srx import generators
+            cfg = generators.generate(prof)
+            assert SECRET in cfg  # sanity: the raw config contains the PSK
+            db.add(VpnConnection(site_id=s.id, name="sec",
+                                 params_json=json.dumps(prof.to_dict()), generated_config=cfg))
+            db.commit()
+            sid = s.id
+        _login_mfa(c, "secusr")
+        tok = _create_token_via_ui(c, "sec-tok", "read")
+        with SessionLocal() as db:
+            thash = db.query(ApiToken).filter_by(token_hash=hash_token(tok)).one().token_hash
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        H = {"Authorization": f"Bearer {tok}"}
+        body = c.get(f"/api/sites/{sid}", headers=H).text
+        assert SECRET not in body                 # PSK never leaves via the API
+        conn = c.get(f"/api/sites/{sid}", headers=H).json()["connections"][0]
+        assert conn["params"]["psk"] == "" and conn["psk_set"] is True
+        assert "<redacted>" in conn["generated_config"]
+        # Token hash / secret never exposed anywhere the API returns.
+        who = c.get("/api/whoami", headers=H).text
+        assert thash not in who and tok not in who
