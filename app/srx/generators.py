@@ -208,8 +208,7 @@ def gen_cradlepoint(p: VpnProfile) -> str:
 # --------------------------------------------------------------------------- #
 # pfSense (strongSwan / swanctl.conf) — also usable on raw strongSwan
 # --------------------------------------------------------------------------- #
-def gen_pfsense(p: VpnProfile) -> str:
-    v = "pfsense"
+def _swanctl_conf(p: VpnProfile, v: str, banner: str) -> str:
     n = p.name
     ike = "-".join([vendor_kw(ENCRYPTION, p.phase1.encryption, v),
                     vendor_kw(INTEGRITY, p.phase1.integrity, v),
@@ -224,7 +223,7 @@ def gen_pfsense(p: VpnProfile) -> str:
     auth = "pubkey" if p.phase1.auth_method == "certificate" else "psk"
 
     lines = [
-        f"# ---- pfSense / strongSwan swanctl.conf: {n} ----",
+        f"# ---- {banner}: {n} ----",
         "connections {",
         f"  {n} {{",
         f"    version = {2 if p.phase1.ike_version == 'ikev2' else 1}",
@@ -259,17 +258,70 @@ def gen_pfsense(p: VpnProfile) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# pfSense — GUI field values (VPN > IPsec > Tunnels). pfSense manages swanctl
+# itself from config.xml, so operators fill these fields in the web UI.
+# --------------------------------------------------------------------------- #
+def _pf_enc(canon: str) -> tuple[str, str]:
+    return {
+        "aes-256-cbc": ("AES", "256"), "aes-192-cbc": ("AES", "192"),
+        "aes-128-cbc": ("AES", "128"), "aes-256-gcm": ("AES256-GCM", ""),
+        "aes-128-gcm": ("AES128-GCM", ""), "3des": ("3DES", ""), "des": ("DES", ""),
+    }.get(canon, (canon.upper(), ""))
+
+
+def _pf_hash(canon: str) -> str:
+    return {"sha1": "SHA1", "sha256": "SHA256", "sha384": "SHA384",
+            "sha512": "SHA512", "md5": "MD5"}.get(canon, canon.upper())
+
+
+def gen_pfsense(p: VpnProfile) -> str:
+    n = p.name
+    cert = p.phase1.auth_method == "certificate"
+    e1, k1 = _pf_enc(p.phase1.encryption)
+    e2, k2 = _pf_enc(p.phase2.encryption)
+    gcm1 = "gcm" in p.phase1.encryption
+    gcm2 = "gcm" in p.phase2.encryption
+    iface = p.wan_interface or "WAN"
+    myid = f"Fully qualified domain name ({p.local.id})" if p.local.id else "My IP address"
+    peerid = f"Fully qualified domain name ({p.remote.id})" if p.remote.id else "Peer IP address"
+
+    out = [f"# ---- pfSense GUI settings — VPN > IPsec > Tunnels ({n}) ----",
+           "[Phase 1 — Edit Phase 1]",
+           f"  Key Exchange version : {'IKEv2' if p.phase1.ike_version == 'ikev2' else 'IKEv1'}",
+           "  Internet Protocol    : IPv4",
+           f"  Interface            : {iface}",
+           f"  Remote Gateway       : {p.remote.public_ip}",
+           f"  Authentication Method: {'Mutual Certificate' if cert else 'Mutual PSK'}",
+           f"  My identifier        : {myid}",
+           f"  Peer identifier      : {peerid}"]
+    if cert:
+        out.append(f"  My Certificate       : {n}-local")
+    else:
+        out.append("  Pre-Shared Key       : <set on device>")
+    out.append(f"  Encryption Algorithm : {e1}" + (f"  Key length: {k1} bits" if k1 else ""))
+    if not gcm1:
+        out.append(f"  Hash                 : {_pf_hash(p.phase1.integrity)}")
+    out += [f"  DH Group             : {p.phase1.dh_group}",
+            f"  Life Time            : {p.phase1.lifetime_seconds}",
+            "",
+            "[Phase 2 — Edit Phase 2]",
+            "  Mode                 : Tunnel IPv4",
+            f"  Local Network        : {(p.local.protected_subnets or ['0.0.0.0/0'])[0]}",
+            f"  Remote Network       : {(p.remote.protected_subnets or ['0.0.0.0/0'])[0]}",
+            "  Protocol             : ESP",
+            f"  Encryption Algorithms: {e2}" + (f"  Key length: {k2} bits" if k2 else "")]
+    if not gcm2:
+        out.append(f"  Hash Algorithms      : {_pf_hash(p.phase2.integrity)}")
+    out += [f"  PFS key group        : {p.phase2.pfs_group}",
+            f"  Life Time            : {p.phase2.lifetime_seconds}"]
+    return _annotate(p, "\n".join(out))
+
+
+# --------------------------------------------------------------------------- #
 # Native strongSwan (swanctl.conf) — same renderer as pfSense's swanctl output
 # --------------------------------------------------------------------------- #
 def gen_strongswan(p: VpnProfile) -> str:
-    # strongSwan keyword set matches pfSense's; reuse the swanctl builder.
-    orig = p.vendor
-    p.vendor = "strongswan"
-    try:
-        cfg = gen_pfsense(p)
-    finally:
-        p.vendor = orig
-    return cfg.replace("pfSense / strongSwan", "native strongSwan")
+    return _swanctl_conf(p, "strongswan", "native strongSwan swanctl.conf")
 
 
 # --------------------------------------------------------------------------- #
