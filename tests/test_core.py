@@ -1457,3 +1457,72 @@ def test_aws_azure_reject_dynamic_endpoint():
                     remote=Endpoint("r", "52.10.20.30", "rem", ["10.2.0.0/24"]))
     p4.remote_vendor = "aws"
     assert not endpoint_warn(p4)
+
+
+def test_import_captures_bgp_and_tunnel():
+    from app.srx import generators as g, importer as imp
+    from app.srx.model import VpnProfile, Endpoint, Bgp
+    p = VpnProfile(name="hq", vendor="juniper_srx",
+                   local=Endpoint("l", "198.51.100.1", "hq.vpn.local", ["10.1.0.0/24"]),
+                   remote=Endpoint("r", "203.0.113.1", "dc.vpn.local", ["10.2.0.0/24"]))
+    p.tunnel_interface = "st0.5"; p.tunnel_ip = "169.254.0.1/30"; p.wan_interface = "ge-0/0/0.0"
+    p.bgp = Bgp(enabled=True, local_as="65001", peer_as="65002", peer_ip="169.254.0.2",
+                local_ip="169.254.0.1", networks=["10.1.0.0/24"])
+    prof = imp.import_config(g.generate(p))
+    assert prof.bgp.enabled and prof.bgp.local_as == "65001" and prof.bgp.peer_as == "65002"
+    assert prof.bgp.peer_ip == "169.254.0.2" and prof.bgp.networks == ["10.1.0.0/24"]
+    assert prof.tunnel_interface == "st0.5" and prof.tunnel_ip == "169.254.0.1/30"
+
+    # Cisco and Fortinet BGP parse (incl. network prefixes)
+    for vendor, las in [("cisco_firepower", "65010"), ("fortinet", "65030")]:
+        c = VpnProfile(name="x", vendor=vendor,
+                       local=Endpoint("l", "1.1.1.1", "", ["10.1.0.0/24"]),
+                       remote=Endpoint("r", "2.2.2.2", "", ["10.2.0.0/24"]))
+        c.bgp = Bgp(enabled=True, local_as=las, peer_as="65099", peer_ip="169.254.9.2",
+                    networks=["10.1.0.0/24"])
+        b = imp.parse_bgp(g.generate(c), vendor)
+        assert b.enabled and b.local_as == las and b.peer_ip == "169.254.9.2"
+        assert b.networks == ["10.1.0.0/24"]
+
+
+def test_relationships_page_and_tunnel_correlation():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, Site, VpnConnection, Vendor
+    from app.srx.model import VpnProfile, Endpoint
+    from app.security.passwords import hash_password
+    import pyotp, re, json
+
+    def _mkconn(db, site, name, lip, rip, lsub, rsub, tunnel):
+        prof = VpnProfile(name=name, vendor=site.vendor.value,
+                          local=Endpoint("l", lip, "", [lsub]),
+                          remote=Endpoint("r", rip, "", [rsub]))
+        prof.tunnel_ip = tunnel
+        c = VpnConnection(site_id=site.id, name=name, params_json=json.dumps(prof.to_dict()),
+                          generated_config="")
+        db.add(c); db.flush(); return c
+
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="rel").first():
+                db.add(User(username="rel", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+            sa = Site(name="RelA", vendor=Vendor.juniper_srx, source="test")
+            sb = Site(name="RelB", vendor=Vendor.juniper_srx, source="test")
+            db.add_all([sa, sb]); db.flush()
+            # Two ends of a tunnel: mirrored IPs/subnets + same /30 tunnel subnet.
+            _mkconn(db, sa, "a-t", "198.51.100.1", "203.0.113.1", "10.1.0.0/24",
+                    "10.2.0.0/24", "169.254.0.1/30")
+            _mkconn(db, sb, "b-t", "203.0.113.1", "198.51.100.1", "10.2.0.0/24",
+                    "10.1.0.0/24", "169.254.0.2/30")
+            db.commit()
+        c.post("/login", data={"username": "rel", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+
+        r = c.get("/connections/relationships")
+        assert r.status_code == 200
+        assert "a-t" in r.text and "b-t" in r.text
+        assert "tunnel IPs share a subnet" in r.text
+        assert "Review" in r.text
