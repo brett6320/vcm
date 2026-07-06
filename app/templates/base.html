@@ -4,12 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/pico.min.css">
   <link rel="stylesheet" href="/static/style.css">
   <script>
-    // Apply theme ASAP to avoid flash. Default: follow system.
+    // Apply theme ASAP to avoid flash. Resolve "system" to light/dark so both
+    // Pico and our own variables (which key off data-theme) agree.
     (function () {
-      var t = localStorage.getItem('vcm-theme') || 'system';
-      document.documentElement.setAttribute('data-theme', t);
+      var pref = localStorage.getItem('vcm-theme') || 'system';
+      var dark = pref === 'dark' || (pref === 'system' &&
+        window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
     })();
   </script>
 </head>

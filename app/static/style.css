@@ -11,20 +11,34 @@
   /* High-contrast link colors for dark backgrounds (WCAG AA on --bg/--card). */
   --link: #8ab4f8; --link-visited: #d0aaf5;
 }
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] {
-    --bg: #14171c; --fg: #e6e8eb; --muted: #9aa4b0; --card: #1e232b; --border: #2c333d;
-    --accent: #4c9be8; --accent-fg: #0b0e12; --danger: #e57373; --warn: #e0b055;
-    --ok: #68d391; --code-bg: #0f1319;
-    --link: #8ab4f8; --link-visited: #d0aaf5;
-  }
+/* theme.js resolves "system" to light/dark, so data-theme is always light|dark. */
+
+/* Drive Pico's core variables from our palette so its base elements (forms,
+   tables, typography, buttons) match our brand + theme without a colour clash. */
+:root {
+  --pico-font-family: system-ui, sans-serif;
+  --pico-border-radius: 8px;
+  --pico-background-color: var(--bg);
+  --pico-color: var(--fg);
+  --pico-muted-color: var(--muted);
+  --pico-primary: var(--accent);
+  --pico-primary-background: var(--accent);
+  --pico-primary-hover-background: var(--accent);
+  --pico-primary-inverse: var(--accent-fg);
+  --pico-primary-focus: color-mix(in srgb, var(--accent) 40%, transparent);
+  --pico-form-element-background-color: var(--bg);
+  --pico-form-element-border-color: var(--border);
+  --pico-form-element-color: var(--fg);
+  --pico-card-background-color: var(--card);
+  --pico-card-border-color: var(--border);
+  --pico-muted-border-color: var(--border);
+  --pico-spacing: 1rem;
+  --pico-typography-spacing-vertical: 1rem;
 }
 * { box-sizing: border-box; }
-body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--fg); }
-/* Content links use theme-aware, high-contrast colors (not browser defaults). */
-a { color: var(--link); }
-a:visited { color: var(--link-visited); }
-a:hover { text-decoration: underline; }
+/* Keep content-link contrast we tuned; Pico primary drives the rest. */
+main a { color: var(--link); }
+main a:visited { color: var(--link-visited); }
 .topbar { display: flex; align-items: center; gap: 1rem; padding: .6rem 1rem;
   background: var(--card); border-bottom: 1px solid var(--border); }
 .brand { font-weight: 700; text-decoration: none; color: var(--fg); font-size: 1.1rem;
@@ -44,9 +58,9 @@ h1, h2, h3 { line-height: 1.2; }
   padding: 1rem 1.2rem; margin-bottom: 1.2rem; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
 .stat { text-align: center; } .stat .num { font-size: 2rem; font-weight: 700; }
+/* Labels stay compact/muted; Pico styles the form controls themselves. */
 label { display: block; margin: .5rem 0 .2rem; font-size: .85rem; color: var(--muted); }
-input, select, textarea { width: 100%; padding: .5rem; border: 1px solid var(--border);
-  border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; }
+input, select, textarea { margin-bottom: 0; }
 textarea { min-height: 120px; font-family: ui-monospace, monospace; }
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
 .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .8rem; }
