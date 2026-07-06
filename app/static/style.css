@@ -103,6 +103,19 @@ pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow: a
 label.inline { display: inline-flex; align-items: center; gap: .3rem; margin: 0;
   font-size: .8rem; }
 
+/* Side-by-side config diff (pre-apply approval). */
+.diff-wrap { overflow-x: auto; }
+table.diff { width: 100%; border-collapse: collapse; font-family: ui-monospace, monospace;
+  font-size: .8rem; table-layout: fixed; }
+table.diff th { text-align: left; color: var(--muted); font-weight: 600; }
+table.diff td { white-space: pre-wrap; word-break: break-word; vertical-align: top;
+  padding: .05rem .5rem; border: 0; width: 50%; }
+tr.diff-equal td { color: var(--fg); }
+tr.diff-insert td:last-child { background: color-mix(in srgb, var(--ok) 22%, transparent); }
+tr.diff-delete td:first-child { background: color-mix(in srgb, var(--danger) 20%, transparent); }
+tr.diff-replace td:first-child { background: color-mix(in srgb, var(--danger) 16%, transparent); }
+tr.diff-replace td:last-child { background: color-mix(in srgb, var(--ok) 18%, transparent); }
+
 /* Collapsible panels (enhanced by collapsible.js on panel-heavy pages). */
 .card.collapsible > .card-head .collapse-toggle,
 .card.collapsible .collapse-toggle { cursor: pointer; user-select: none; }

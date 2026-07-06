@@ -510,12 +510,13 @@ def test_edit_connection():
         cid = int(r.headers["location"].split("/")[-1])
         # edit form pre-fills current values
         assert 'value="2.2.2.2"' in c.get(f"/connections/{cid}/edit").text
-        # change the remote IP + P1 encryption
+        # change the remote IP + P1 encryption (confirm=1 skips the diff-approval gate)
         r = c.post(f"/connections/{cid}/edit", data=dict(
             local_ip="1.1.1.1", remote_ip="9.9.9.9", local_subnets="10.1.0.0/24",
             remote_subnets="10.9.0.0/24", auth_method="certificate",
             p1_enc="aes-256-cbc", p1_integ="sha256", p1_dh="14",
-            p1_ver="ikev2", p2_enc="aes-256-cbc", p2_integ="sha256", p2_pfs="14"),
+            p1_ver="ikev2", p2_enc="aes-256-cbc", p2_integ="sha256", p2_pfs="14",
+            confirm="1"),
             follow_redirects=False)
         assert r.status_code == 303
         with SessionLocal() as db:
@@ -561,7 +562,7 @@ def test_infer_peers_suggest_only():
         # find B's id and confirm the pairing
         import re as _re
         bid = int(_re.search(r'name="peer_id" value="(\d+)"', page).group(1))
-        c.post(f"/connections/{aid}/pair-confirm", data={"peer_id": bid})
+        c.post(f"/connections/{aid}/pair-confirm", data={"peer_id": bid, "confirm": "1"})
         with SessionLocal() as db:
             a = db.get(VpnConnection, aid)
             assert a.peer_connection_id == bid                            # linked on confirm
@@ -1092,3 +1093,58 @@ def test_cert_lock_blocks_delete_route_two_step():
         assert r.status_code == 303
         with SessionLocal() as db:
             assert db.get(Certificate, cid) is None
+
+
+def test_side_by_side_diff_helper():
+    from app.srx.diff import side_by_side, changed
+    rows = side_by_side("a\nb\nc", "a\nB\nc\nd")
+    kinds = [r["kind"] for r in rows]
+    assert "equal" in kinds and "replace" in kinds and "insert" in kinds
+    # replaced line shows both sides
+    rep = [r for r in rows if r["kind"] == "replace"][0]
+    assert rep["left"] == "b" and rep["right"] == "B"
+    # inserted line has empty left
+    ins = [r for r in rows if r["kind"] == "insert"][0]
+    assert ins["left"] == "" and ins["right"] == "d"
+    assert changed("x", "y") and not changed("x\n", "x")
+
+
+def test_edit_connection_requires_diff_approval():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, VpnConnection
+    from app.security.passwords import hash_password
+    import pyotp, re, json
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="df").first():
+                db.add(User(username="df", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        c.post("/login", data={"username": "df", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+        r = c.post("/sites/generate", data=dict(name="DF", vendor="juniper_srx",
+                   local_ip="1.1.1.1", remote_ip="2.2.2.2", local_subnets="10.1.0.0/24",
+                   remote_subnets="10.2.0.0/24", auth_method="certificate"),
+                   follow_redirects=False)
+        cid = int(r.headers["location"].split("/")[-1])
+
+        base = dict(local_ip="1.1.1.1", remote_ip="9.9.9.9", local_subnets="10.1.0.0/24",
+                    remote_subnets="10.9.0.0/24", auth_method="certificate",
+                    p1_enc="aes-256-cbc", p1_integ="sha256", p1_dh="14", p1_ver="ikev2",
+                    p2_enc="aes-256-cbc", p2_integ="sha256", p2_pfs="14")
+
+        # Step 1: submit edit → get the diff approval page, NOT applied yet.
+        r = c.post(f"/connections/{cid}/edit", data=base)
+        assert "Proposed" in r.text and "Approve" in r.text
+        with SessionLocal() as db:
+            assert json.loads(db.get(VpnConnection, cid).params_json)["remote"]["public_ip"] == "2.2.2.2"
+
+        # Step 2: approve → applied.
+        r = c.post(f"/connections/{cid}/edit", data={**base, "confirm": "1"},
+                   follow_redirects=False)
+        assert r.status_code == 303
+        with SessionLocal() as db:
+            assert json.loads(db.get(VpnConnection, cid).params_json)["remote"]["public_ip"] == "9.9.9.9"
