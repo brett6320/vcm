@@ -161,6 +161,38 @@ def test_aws_import_only_and_far_end():
     assert "managed by AWS" in generators.generate(prof)
 
 
+def test_interface_and_tunnel_ip_inputs():
+    p = _mk_profile()
+    p.tunnel_interface = "st0.5"
+    p.wan_interface = "ge-0/0/3.0"
+    p.tunnel_ip = "169.254.0.1/30"
+    cfg = generators.generate(p)
+    assert "bind-interface st0.5" in cfg
+    assert "external-interface ge-0/0/3.0" in cfg
+    assert "set interfaces st0.5 family inet address 169.254.0.1/30" in cfg
+    # Palo honours interfaces too
+    pa = _mk_profile(vendor="palo_alto")
+    pa.wan_interface = "ethernet1/2"; pa.tunnel_interface = "tunnel.7"
+    pc = generators.generate(pa)
+    assert "local-address interface ethernet1/2" in pc and "tunnel-interface tunnel.7" in pc
+
+
+def test_srx_traffic_selectors_by_peer_platform():
+    ts_line = "vpn-siteA traffic-selector ts0 local-ip"
+    # Route-based peer (another SRX) → no traffic-selector config lines
+    p = _mk_profile()
+    p.remote_vendor = "juniper_srx"
+    out = generators.generate(p)
+    assert ts_line not in out and "route-based" in out
+    # Policy-based peer (AWS) → traffic-selector config present
+    p.remote_vendor = "aws"
+    out = generators.generate(p)
+    assert "traffic-selector ts0 local-ip 10.1.0.0/24" in out and "policy-based" in out
+    # Unspecified → safe default includes them
+    p.remote_vendor = ""
+    assert ts_line in generators.generate(p)
+
+
 def test_all_vendors_generate():
     for v in ("juniper_srx", "digi", "cradlepoint", "pfsense", "fortinet",
               "palo_alto", "cisco_firepower", "strongswan", "mikrotik"):
