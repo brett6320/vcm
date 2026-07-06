@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Certificate {{ cert.serial }}</h1>
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 <div class="card">
   <p><strong>Subject:</strong> {{ cert.subject_dn }}</p>
   <p><strong>SAN:</strong> {{ cert.san or '—' }}</p>
@@ -10,4 +11,21 @@
   <a class="btn small" href="/pki/cert/{{ cert.id }}/pem?fmt=fullchain">Download full chain</a>
 </div>
 <div class="card"><h3>Full chain (PEM)</h3><pre>{{ fullchain }}</pre></div>
+
+{% if user and user.role.value == 'admin' %}
+<div class="card">
+  <h3 style="color:var(--danger)">Danger zone — delete certificate</h3>
+  <p class="muted">Permanently removes this issued certificate record. This cannot be
+    undone. The certificate is <strong>not</strong> revoked on any device that already
+    trusts it — deleting only removes it from this manager. To confirm, type the serial
+    <code>{{ cert.serial }}</code> below.</p>
+  <form method="post" action="/pki/cert/{{ cert.id }}/delete"
+        onsubmit="return confirm('Permanently delete certificate {{ cert.serial }}? This cannot be undone.');">
+    <label>Type the serial to confirm</label>
+    <input name="confirm_serial" autocomplete="off" placeholder="{{ cert.serial }}" required
+           style="max-width:24rem">
+    <button class="btn danger" style="margin-top:.6rem">Delete certificate</button>
+  </form>
+</div>
+{% endif %}
 {% endblock %}

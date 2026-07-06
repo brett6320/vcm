@@ -123,3 +123,23 @@ def cert_pem(cert_id: int, fmt: str = "cert", db: Session = Depends(get_db),
         raise HTTPException(404, "Not found")
     body = cert.cert_pem if fmt == "cert" else cert.cert_pem + "\n" + ca_ops.chain_pem(db, cert.ca)
     return PlainTextResponse(body, media_type="application/x-pem-file")
+
+
+@router.post("/cert/{cert_id}/delete")
+def delete_cert(cert_id: int, request: Request, confirm_serial: str = Form(""),
+                db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Permanently delete an issued certificate. Admin-only; the operator must
+    re-type the certificate serial to confirm (guards against wrong-row deletes).
+    Removes only the issued leaf record — CAs are never touched here."""
+    cert = db.get(Certificate, cert_id)
+    if not cert:
+        raise HTTPException(404, "Not found")
+    if confirm_serial.strip() != cert.serial:
+        fullchain = cert.cert_pem + "\n" + ca_ops.chain_pem(db, cert.ca)
+        return render(request, "cert.html", cert=cert, fullchain=fullchain,
+                      error="Serial confirmation did not match — nothing was deleted.")
+    serial, subject = cert.serial, cert.subject_dn
+    db.delete(cert)
+    db.flush()
+    audit(db, request, "pki.cert_delete", f"{serial}:{subject}", user=user)
+    return RedirectResponse("/pki", status_code=303)
