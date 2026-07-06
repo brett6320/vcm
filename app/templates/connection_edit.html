@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% from "_macros.html" import vendor_select %}
+{% block content %}
+<p><a href="/connections/{{ conn.id }}">← {{ conn.name }}</a></p>
+<h1>Edit connection <span class="muted">{{ conn.name }} on {{ site.name }} ({{ site.vendor.label }})</span></h1>
+<p class="muted">Editing regenerates this connection's config. If it's paired, rebuild the
+  far-end afterwards so both sides stay in sync. To change the name, use Rename.</p>
+
+<div class="card">
+  <form method="post" action="/connections/{{ conn.id }}/edit">
+    <div class="row">
+      <fieldset><legend>Local endpoint</legend>
+        <label>Public IP *</label><input name="local_ip" value="{{ profile.local.public_ip }}" required>
+        <label>IKE ID <span class="muted">(blank = auto)</span></label>
+        <input name="local_id" value="{{ profile.local.id }}">
+        <label>Protected subnets *</label>
+        <input name="local_subnets" value="{{ profile.local.protected_subnets | join(', ') }}" required>
+      </fieldset>
+      <fieldset><legend>Remote endpoint</legend>
+        <label>Public IP *</label><input name="remote_ip" value="{{ profile.remote.public_ip }}" required>
+        <label>IKE ID <span class="muted">(blank = auto)</span></label>
+        <input name="remote_id" value="{{ profile.remote.id }}">
+        <label>Protected subnets *</label>
+        <input name="remote_subnets" value="{{ profile.remote.protected_subnets | join(', ') }}" required>
+      </fieldset>
+    </div>
+    <div class="row3">
+      <div><label>Auth</label>{{ vendor_select('auth_method', vopts.auth_methods, profile.phase1.auth_method) }}</div>
+      <div><label>PSK (if used)</label><input name="psk" value="{{ profile.psk }}"></div>
+      <div><label>IKE version</label>{{ vendor_select('p1_ver', vopts.ike_versions, profile.phase1.ike_version) }}</div>
+    </div>
+    <div class="row3">
+      <div><label>P1 encryption</label>{{ vendor_select('p1_enc', vopts.encryption, profile.phase1.encryption) }}</div>
+      <div><label>P1 integrity</label>{{ vendor_select('p1_integ', vopts.integrity, profile.phase1.integrity) }}</div>
+      <div><label>P1 DH group</label>{{ vendor_select('p1_dh', vopts.dh_groups, profile.phase1.dh_group) }}</div>
+    </div>
+    <div class="row3">
+      <div><label>P2 encryption</label>{{ vendor_select('p2_enc', vopts.encryption, profile.phase2.encryption) }}</div>
+      <div><label>P2 integrity</label>{{ vendor_select('p2_integ', vopts.integrity, profile.phase2.integrity) }}</div>
+      <div><label>P2 PFS group</label>{{ vendor_select('p2_pfs', vopts.dh_groups, profile.phase2.pfs_group) }}</div>
+    </div>
+    <fieldset style="margin-top:.8rem"><legend>Interfaces &amp; routing (optional)</legend>
+      <div class="row3">
+        <div><label>Tunnel interface</label><input name="tunnel_interface" value="{{ profile.tunnel_interface }}" placeholder="st0.0 / tunnel.1"></div>
+        <div><label>WAN / external interface</label><input name="wan_interface" value="{{ profile.wan_interface }}" placeholder="ge-0/0/0 / wan1 / …"></div>
+        <div><label>Tunnel interface IP</label><input name="tunnel_ip" value="{{ profile.tunnel_ip }}" placeholder="169.254.0.1/30"></div>
+      </div>
+      <label>Far-end platform <span class="muted">(decides whether SRX traffic-selectors are needed)</span></label>
+      <select name="remote_vendor">
+        <option value="">— unspecified (safe default) —</option>
+        {% for v in all_vendors %}<option value="{{ v.value }}" {% if v.value == profile.remote_vendor %}selected{% endif %}>{{ v.label }}</option>{% endfor %}
+      </select>
+    </fieldset>
+    <fieldset style="margin-top:.8rem"><legend>BGP over tunnel (optional)</legend>
+      <label><input type="checkbox" name="bgp_enabled" value="1" style="width:auto" {% if profile.bgp.enabled %}checked{% endif %}> Enable BGP</label>
+      <div class="row3">
+        <div><label>Local AS</label><input name="bgp_local_as" value="{{ profile.bgp.local_as }}"></div>
+        <div><label>Peer AS</label><input name="bgp_peer_as" value="{{ profile.bgp.peer_as }}"></div>
+        <div><label>Peer IP (neighbor)</label><input name="bgp_peer_ip" value="{{ profile.bgp.peer_ip }}"></div>
+      </div>
+      <div class="row">
+        <div><label>Local BGP IP / router-id</label><input name="bgp_local_ip" value="{{ profile.bgp.local_ip }}"></div>
+        <div><label>Networks to advertise</label><input name="bgp_networks" value="{{ profile.bgp.networks | join(', ') }}"></div>
+      </div>
+    </fieldset>
+    <div style="margin-top:.8rem">
+      <button class="btn">Save changes</button>
+      <a class="btn small" href="/connections/{{ conn.id }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

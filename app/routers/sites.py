@@ -314,6 +314,57 @@ def connection_detail(conn_id: int, request: Request, db: Session = Depends(get_
                   vendors=generatable_vendors(), peer_suggest=mirror.to_dict())
 
 
+@conn_router.get("/{conn_id}/edit")
+def edit_connection_form(conn_id: int, request: Request, db: Session = Depends(get_db),
+                         user: User = Depends(current_user)):
+    conn = db.get(VpnConnection, conn_id)
+    if not conn:
+        raise HTTPException(404, "Not found")
+    return render(request, "connection_edit.html", conn=conn, site=conn.site,
+                  profile=_profile(conn).to_dict(), all_vendors=list(Vendor),
+                  vopts=proposals.vendor_options(conn.site.vendor.value))
+
+
+@conn_router.post("/{conn_id}/edit")
+def edit_connection(conn_id: int, request: Request,
+                    local_ip: str = Form(""), local_id: str = Form(""),
+                    local_subnets: str = Form(""), remote_ip: str = Form(""),
+                    remote_id: str = Form(""), remote_subnets: str = Form(""),
+                    auth_method: str = Form("certificate"), psk: str = Form(""),
+                    p1_enc: str = Form(""), p1_integ: str = Form(""), p1_dh: str = Form(""),
+                    p1_ver: str = Form(""),
+                    p2_enc: str = Form(""), p2_integ: str = Form(""), p2_pfs: str = Form(""),
+                    bgp_enabled: str = Form(""), bgp_local_as: str = Form(""),
+                    bgp_peer_as: str = Form(""), bgp_peer_ip: str = Form(""),
+                    bgp_local_ip: str = Form(""), bgp_networks: str = Form(""),
+                    tunnel_interface: str = Form(""), wan_interface: str = Form(""),
+                    tunnel_ip: str = Form(""), remote_vendor: str = Form(""),
+                    db: Session = Depends(get_db), user: User = Depends(current_user)):
+    conn = db.get(VpnConnection, conn_id)
+    if not conn:
+        raise HTTPException(404, "Not found")
+    site = conn.site
+    errors = _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method,
+                                 psk, local_ip)
+    if errors:
+        return render(request, "connection_edit.html", conn=conn, site=site,
+                      profile=_profile(conn).to_dict(), all_vendors=list(Vendor),
+                      vopts=proposals.vendor_options(site.vendor.value),
+                      error="; ".join(errors))
+    profile = _build_profile_from_form(db, conn.name, site.vendor.value, site.model or "",
+                                       local_ip, local_id, local_subnets, remote_ip,
+                                       remote_id, remote_subnets, auth_method, psk,
+                                       p1_enc, p1_integ, p1_dh, p1_ver, p2_enc, p2_integ,
+                                       p2_pfs)
+    profile.bgp = _bgp_from_form(bgp_enabled, bgp_local_as, bgp_peer_as, bgp_peer_ip,
+                                 bgp_local_ip, bgp_networks)
+    _apply_interfaces(profile, tunnel_interface, wan_interface, tunnel_ip, remote_vendor)
+    _save_profile(conn, site, profile)   # keeps the connection name, regenerates config
+    db.flush()
+    audit(db, request, "conn.edit", f"{site.name}/{conn.name}", user=user)
+    return RedirectResponse(f"/connections/{conn.id}", status_code=303)
+
+
 @conn_router.get("/{conn_id}/config")
 def connection_config(conn_id: int, db: Session = Depends(get_db),
                       user: User = Depends(current_user)):
