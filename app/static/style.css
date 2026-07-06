@@ -102,3 +102,10 @@ pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow: a
 .ca-del-form input[name="confirm_name"] { width: auto; }
 label.inline { display: inline-flex; align-items: center; gap: .3rem; margin: 0;
   font-size: .8rem; }
+
+/* Collapsible panels (enhanced by collapsible.js on panel-heavy pages). */
+.card.collapsible > .card-head .collapse-toggle,
+.card.collapsible .collapse-toggle { cursor: pointer; user-select: none; }
+.collapse-arrow { color: var(--muted); font-size: .8em; }
+.card.collapsed > :not(.card-head) { display: none; }
+.card.collapsed { padding-bottom: .6rem; }
