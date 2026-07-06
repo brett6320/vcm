@@ -41,6 +41,27 @@
     rename commands for {{ site.vendor.label }}.</p>
 </div>
 
+{% if proposal_groups %}
+<div class="card">
+  <h3>Proposals — {{ sides.this_label.split(' / ')[0] }} vs {{ sides.far_label.split(' / ')[0].split(' (')[0] }}</h3>
+  <table class="proposals">
+    <tr><th>Parameter</th><th>This end</th><th>Far end</th></tr>
+    {% for g in proposal_groups %}
+    <tr class="prop-section"><td colspan="3">{{ g.section }}</td></tr>
+    {% for r in g.rows %}
+    <tr class="{{ '' if r.match else 'prop-mismatch' }}">
+      <td class="muted">{{ r.label }}</td>
+      <td>{{ r.near }}</td>
+      <td>{{ r.far }}{% if not r.match %} {{ icon('warn', 13) }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+    {% endfor %}
+  </table>
+  <p class="muted">Phase-1/2 proposal values must match on both ends; highlighted rows
+    differ{% if not peer %} (far end shown is the on-the-fly mirror){% endif %}.</p>
+</div>
+{% endif %}
+
 <div class="card">
   <div style="display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap">
     <h3 style="margin-right:auto">Configuration — both sides</h3>

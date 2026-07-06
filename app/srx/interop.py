@@ -24,6 +24,35 @@ def _cmp(field, near, far, *, near_is_import, remediate_extra=""):
             "severity": "mismatch", "message": msg, "remediation": rem}
 
 
+def proposal_rows(near: VpnProfile, far: VpnProfile) -> list[dict]:
+    """Structured side-by-side of the IKE/IPsec proposal parameters for both ends,
+    grouped by phase. Each row is {label, near, far, match}; `match` is False when
+    the two ends disagree (these values must be equal for the tunnel to come up)."""
+    p1n, p1f, p2n, p2f = near.phase1, far.phase1, near.phase2, far.phase2
+
+    def row(label, a, b):
+        return {"label": label, "near": str(a), "far": str(b), "match": str(a) == str(b)}
+
+    return [
+        {"section": "Phase 1 (IKE)", "rows": [
+            row("IKE version", p1n.ike_version, p1f.ike_version),
+            row("Encryption", p1n.encryption, p1f.encryption),
+            row("Integrity", p1n.integrity, p1f.integrity),
+            row("DH group", p1n.dh_group, p1f.dh_group),
+            row("Auth method", p1n.auth_method, p1f.auth_method),
+            row("Lifetime (s)", p1n.lifetime_seconds, p1f.lifetime_seconds),
+            row("DPD (s)", p1n.dpd_seconds, p1f.dpd_seconds),
+        ]},
+        {"section": "Phase 2 (IPsec)", "rows": [
+            row("Protocol", p2n.protocol, p2f.protocol),
+            row("Encryption", p2n.encryption, p2f.encryption),
+            row("Integrity", p2n.integrity, p2f.integrity),
+            row("PFS group", p2n.pfs_group, p2f.pfs_group),
+            row("Lifetime (s)", p2n.lifetime_seconds, p2f.lifetime_seconds),
+        ]},
+    ]
+
+
 def mismatches(near: VpnProfile, far: VpnProfile, *, near_is_import: bool = True) -> list[dict]:
     """Return interop problems between the two ends (empty when they agree).
 

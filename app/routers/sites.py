@@ -538,11 +538,11 @@ def connection_detail(conn_id: int, request: Request, fmt: str = "set",
         m.vendor = far_vendor
         suggest.fill_ike_ids(m)
         far_raw = generators.generate(m)
-    # Interop check between the two ends (imported side is authoritative).
-    interop_issues = []
-    if peer:
-        interop_issues = interop.mismatches(
-            profile, _profile(peer), near_is_import=(conn.source == "imported"))
+    # Interop check + structured proposal comparison between the two ends.
+    far_profile = _profile(peer) if peer else mirror
+    interop_issues = interop.mismatches(
+        profile, far_profile, near_is_import=(conn.source == "imported")) if peer else []
+    proposal_groups = interop.proposal_rows(profile, far_profile)
     sides = {
         "this_label": f"{conn.site.name} / {conn.name} ({conn.site.vendor.label})",
         "this_config": _fmt_config(this_vendor, conn.generated_config, fmt),
@@ -558,7 +558,7 @@ def connection_detail(conn_id: int, request: Request, fmt: str = "set",
                   vendors=generatable_vendors(), peer_suggest=mirror.to_dict(),
                   suggestions=(_suggest_peers(db, conn, profile) if not peer else []),
                   bgp_suggest=bgp_suggest, sides=sides, fmt=fmt,
-                  interop_issues=interop_issues)
+                  interop_issues=interop_issues, proposal_groups=proposal_groups)
 
 
 def _same_tunnel_subnet(a: str, b: str) -> bool:
