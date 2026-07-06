@@ -145,16 +145,9 @@ def create_ca(
     return ca
 
 
-def _create_pending_ca(db, *, name, dn, ca_type, key_type, key_params, parent, path_len):
-    """Generate the new CA's keypair + a CSR (signed by its own key), and store
-    it as pending. The CSR is meant to be signed by `parent`'s offline key; the
-    resulting cert is uploaded later via complete_pending_ca()."""
-    key = keys.generate_key(key_type, key_params)
-    subject = _name_from_dn(dn)
-    if path_len is None:
-        path_len = 0 if ca_type == CAType.issuing else None
-
-    csr = (
+def _build_ca_csr(subject: x509.Name, key, path_len: int | None):
+    """A CA-requesting CSR (BasicConstraints CA:TRUE + keyCertSign) signed by key."""
+    return (
         x509.CertificateSigningRequestBuilder()
         .subject_name(subject)
         .add_extension(x509.BasicConstraints(ca=True, path_length=path_len), critical=True)
@@ -168,6 +161,18 @@ def _create_pending_ca(db, *, name, dn, ca_type, key_type, key_params, parent, p
         )
         .sign(key, _hash_for(key))
     )
+
+
+def _create_pending_ca(db, *, name, dn, ca_type, key_type, key_params, parent, path_len):
+    """Generate the new CA's keypair + a CSR (signed by its own key), and store
+    it as pending. The CSR is meant to be signed by `parent`'s offline key; the
+    resulting cert is uploaded later via complete_pending_ca()."""
+    key = keys.generate_key(key_type, key_params)
+    subject = _name_from_dn(dn)
+    if path_len is None:
+        path_len = 0 if ca_type == CAType.issuing else None
+
+    csr = _build_ca_csr(subject, key, path_len)
     now = utcnow()
     ca = CertAuthority(
         name=name,
@@ -189,10 +194,30 @@ def _create_pending_ca(db, *, name, dn, ca_type, key_type, key_params, parent, p
     return ca
 
 
-def complete_pending_ca(db: Session, ca: CertAuthority, cert_pem: str) -> CertAuthority:
+def regenerate_pending_csr(db: Session, ca: CertAuthority) -> CertAuthority:
+    """Generate a fresh keypair + CSR for a pending CA, reusing its subject and
+    key parameters. The previous (unsigned) key/CSR are superseded."""
+    if not ca.pending:
+        raise ValueError(f"CA '{ca.name}' is not pending a certificate.")
+    subject = x509.Name.from_rfc4514_string(ca.subject_dn)
+    key = keys.generate_key(ca.key_type, ca.key_params)
+    csr = _build_ca_csr(subject, key, ca.path_len)
+    ca.key_enc = keys.wrap_private_key(key)
+    ca.csr_pem = csr.public_bytes(serialization_encoding()).decode()
+    db.flush()
+    return ca
+
+
+def complete_pending_ca(db: Session, ca: CertAuthority, cert_pem: str,
+                        allow_non_ca: bool = False) -> CertAuthority:
     """Attach an externally-signed certificate to a pending CA. Validates that
     the cert's public key matches the CA's generated key and that it is a CA
-    cert, then clears the pending state so it becomes usable."""
+    cert, then clears the pending state so it becomes usable.
+
+    Some signers emit a certificate without a CA BasicConstraints extension
+    (e.g. `openssl x509 -req` with no CA extfile). Such a cert can't actually
+    act as a CA, but the operator can override with `allow_non_ca=True` when
+    they know the intent — the key-match and issuer checks still apply."""
     if not ca.pending:
         raise ValueError(f"CA '{ca.name}' is not pending a certificate.")
     try:
@@ -210,14 +235,23 @@ def complete_pending_ca(db: Session, ca: CertAuthority, cert_pem: str) -> CertAu
             "it was not issued from the generated CSR."
         )
 
-    # Must be a CA certificate.
+    # Should be a CA certificate. Missing/false BasicConstraints is overridable.
     try:
         bc = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
-        if not bc.ca:
-            raise ValueError("Uploaded certificate is not a CA certificate (CA:FALSE).")
         path_len = bc.path_length
+        if not bc.ca and not allow_non_ca:
+            raise ValueError(
+                "Uploaded certificate is marked CA:FALSE. Re-sign it as a CA "
+                "(Basic Constraints CA:TRUE), or tick 'accept anyway' to override."
+            )
     except x509.ExtensionNotFound:
-        raise ValueError("Uploaded certificate lacks Basic Constraints (not a CA cert).")
+        path_len = None
+        if not allow_non_ca:
+            raise ValueError(
+                "Uploaded certificate has no Basic Constraints extension, so it is "
+                "not marked as a CA. Re-sign it with CA:TRUE (e.g. openssl with a "
+                "CA extfile), or tick 'accept anyway' to override."
+            )
 
     # Best-effort: warn if it doesn't chain to the recorded parent by issuer name.
     parent = db.get(CertAuthority, ca.parent_id) if ca.parent_id else None

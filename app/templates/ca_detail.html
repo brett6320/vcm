@@ -29,6 +29,14 @@
     the signed certificate below. The CA becomes usable only once a matching, valid certificate
     is uploaded.</p>
   <a class="btn" href="/pki/ca/{{ ca.id }}/csr">Download CSR</a>
+  {% if user and user.role.value == 'admin' %}
+  <form method="post" action="/pki/ca/{{ ca.id }}/new-csr" style="display:inline"
+        onsubmit="return confirm('Generate a fresh key and CSR? The current unsigned CSR is replaced.');">
+    <button class="btn small">Generate a fresh CSR</button></form>
+  <form method="post" action="/pki/ca/{{ ca.id }}/discard" style="display:inline"
+        onsubmit="return confirm('Discard this incomplete CA? This deletes the generated key and CSR.');">
+    <button class="btn small danger">Discard pending CA</button></form>
+  {% endif %}
   <h3 style="margin-top:1rem">Certificate signing request (PEM)</h3>
   <pre>{{ ca.csr_pem }}</pre>
 
@@ -39,6 +47,9 @@
     <input type="file" name="cert_file" accept=".pem,.crt,.cer">
     <label>…or paste the signed certificate (PEM)</label>
     <textarea name="cert_pem" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+    <label class="inline" style="margin-top:.4rem">
+      <input type="checkbox" name="allow_non_ca" value="1" style="width:auto">
+      Accept even if the certificate isn't marked as a CA (missing/false Basic Constraints)</label>
     <button class="btn" style="margin-top:.6rem">Validate &amp; complete CA</button>
   </form>
   <p class="muted">The upload is validated: its public key must match this CA's generated key,
