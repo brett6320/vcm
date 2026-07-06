@@ -56,7 +56,7 @@ def current_user(request: Request, db: Session = Depends(get_db),
     """Require a fully authenticated (MFA-passed) session. Redirects to login/UI."""
     sess, user = _session_and_user(request, db)
     if not user:
-        raise AuthRedirect("/login")
+        raise AuthRedirect("/login" + _next_query(request))
     if user.must_change_password:
         # Force a password change before anything else, including MFA enrollment.
         raise AuthRedirect("/account/first-password")
@@ -68,6 +68,27 @@ def current_user(request: Request, db: Session = Depends(get_db),
     request.state.user = user
     request.state.session = sess
     return user
+
+
+def safe_next(url: str | None) -> str | None:
+    """Only allow same-site absolute paths (avoid open redirects)."""
+    if not url or not url.startswith("/") or url.startswith("//") or "://" in url:
+        return None
+    return url
+
+
+def _next_query(request: Request) -> str:
+    import urllib.parse
+
+    # Only remember safe GET targets for the redirect-back.
+    if request.method != "GET":
+        return ""
+    target = request.url.path
+    if request.url.query:
+        target += "?" + request.url.query
+    if not safe_next(target) or target in ("/", "/login"):
+        return ""
+    return "?next=" + urllib.parse.quote(target, safe="")
 
 
 def require_admin(user: User = Depends(current_user)) -> User:

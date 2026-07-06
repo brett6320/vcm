@@ -181,6 +181,8 @@ class UserSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     mfa_ok: Mapped[bool] = mapped_column(Boolean, default=False)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Where to send the user once fully authenticated (the originally-requested page).
+    next_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
     user: Mapped[User] = relationship()
 

@@ -3,6 +3,7 @@
 <div class="card" style="max-width:400px;margin:3rem auto;">
   <h2>Sign in</h2>
   <form method="post" action="/login">
+    {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
     <label>Username</label>
     <input name="username" autofocus autocomplete="username">
     <label>Password</label>

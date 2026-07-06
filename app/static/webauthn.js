@@ -40,7 +40,8 @@ async function registerPasskey(redirect) {
   };
   const r = await fetch('/mfa/enroll/passkey/verify',
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (r.ok) location.href = redirect || '/'; else alert('Passkey registration failed');
+  if (r.ok) { const d = await r.json().catch(() => ({})); location.href = d.redirect || redirect || '/'; }
+  else alert('Passkey registration failed');
 }
 
 async function authPasskey() {
@@ -59,5 +60,6 @@ async function authPasskey() {
   };
   const r = await fetch('/mfa/passkey/verify',
     { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (r.ok) location.href = '/'; else alert('Passkey authentication failed');
+  if (r.ok) { const d = await r.json().catch(() => ({})); location.href = d.redirect || '/'; }
+  else alert('Passkey authentication failed');
 }
