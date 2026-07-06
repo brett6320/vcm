@@ -1,3 +1,4 @@
+import pytest
 import base64
 import os
 
@@ -819,6 +820,45 @@ def test_pki_hierarchy_and_csr_sign():
         assert chain.count("BEGIN CERTIFICATE") == 2  # issuing + root
         # never export CA private key
         assert not hasattr(cert, "key_pem")
+
+
+def test_load_material_p12_and_pem():
+    import datetime
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import pkcs12
+    from app.pki import material
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    nm = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+    cert = (x509.CertificateBuilder().subject_name(nm).issuer_name(nm)
+            .public_key(key.public_key()).serial_number(1)
+            .not_valid_before(datetime.datetime(2024, 1, 1))
+            .not_valid_after(datetime.datetime(2034, 1, 1))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+            .sign(key, hashes.SHA256()))
+
+    # Password-protected PKCS#12 → cert + key.
+    blob = pkcs12.serialize_key_and_certificates(
+        b"ca", key, cert, None, serialization.BestAvailableEncryption(b"secret"))
+    assert material.looks_like_p12("ca.p12", blob)
+    c, k = material.load_material("ca.p12", blob, "secret")
+    assert c.startswith("-----BEGIN CERTIFICATE") and k.startswith("-----BEGIN PRIVATE KEY")
+
+    # Wrong password fails clearly.
+    with pytest.raises(Exception):
+        material.load_material("ca.p12", blob, "wrong")
+
+    # PEM bundle and cert-only PEM.
+    pem = cert.public_bytes(serialization.Encoding.PEM) + key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption())
+    c2, k2 = material.load_material("ca.pem", pem, None)
+    assert k2.startswith("-----BEGIN PRIVATE KEY")
+    c3, k3 = material.load_material("c.pem", cert.public_bytes(serialization.Encoding.PEM), None)
+    assert c3.startswith("-----BEGIN CERTIFICATE") and k3 is None
 
 
 def test_create_ca_under_keyless_parent_errors_cleanly():

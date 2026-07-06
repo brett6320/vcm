@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from ..db import get_db
 from ..models import CAType, CertAuthority, Certificate, User
 from ..pki import ca as ca_ops
 from ..pki import csr as csr_ops
+from ..pki import material
 from ..security.deps import audit, current_user, require_admin
 from ..templates_env import render
 
@@ -56,11 +57,22 @@ def create_ca(request: Request, name: str = Form(...), cn: str = Form(...),
 
 
 @router.post("/ca/import")
-def import_ca(request: Request, name: str = Form(...), cert_pem: str = Form(...),
-              key_pem: str = Form(""), ca_type: str = Form(""),
-              db: Session = Depends(get_db), user: User = Depends(require_admin)):
+async def import_ca(request: Request, name: str = Form(...), cert_pem: str = Form(""),
+                    key_pem: str = Form(""), ca_type: str = Form(""),
+                    cert_file: UploadFile | None = File(None),
+                    p12_password: str = Form(""),
+                    db: Session = Depends(get_db), user: User = Depends(require_admin)):
     override = CAType(ca_type) if ca_type else None
     try:
+        # An uploaded file (PEM or PKCS#12) takes precedence over pasted PEM.
+        if cert_file is not None and cert_file.filename:
+            data = await cert_file.read()
+            up_cert, up_key = material.load_material(cert_file.filename, data,
+                                                     p12_password or None)
+            cert_pem = up_cert
+            key_pem = up_key or key_pem
+        if not cert_pem.strip():
+            raise ValueError("Provide a certificate (paste PEM or upload a file)")
         ca = ca_ops.import_ca(db, name=name, cert_pem=cert_pem, key_pem=key_pem or None,
                               ca_type_override=override)
     except Exception as e:  # noqa: BLE001
