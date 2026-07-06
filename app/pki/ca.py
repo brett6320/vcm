@@ -141,6 +141,102 @@ def serialization_encoding():
 
 
 # --------------------------------------------------------------------------- #
+# Import an existing CA (cert + optional private key)
+# --------------------------------------------------------------------------- #
+def import_ca(
+    db: Session,
+    *,
+    name: str,
+    cert_pem: str,
+    key_pem: str | None = None,
+    ca_type_override: CAType | None = None,
+) -> CertAuthority:
+    from cryptography.hazmat.primitives import serialization
+
+    cert = x509.load_pem_x509_certificate(cert_pem.encode())
+    # Must be a CA certificate.
+    try:
+        bc = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+        if not bc.ca:
+            raise ValueError("Certificate is not a CA (BasicConstraints CA=false)")
+        path_len = bc.path_length
+    except x509.ExtensionNotFound:
+        bc, path_len = None, None
+
+    key = None
+    key_enc = b""
+    key_type, key_params = _describe_public_key(cert.public_key())
+    if key_pem and key_pem.strip():
+        key = serialization.load_pem_private_key(key_pem.encode(), password=None)
+        # The private key must correspond to the certificate's public key.
+        if (key.public_key().public_bytes(serialization.Encoding.PEM,
+                                          serialization.PublicFormat.SubjectPublicKeyInfo)
+                != cert.public_key().public_bytes(serialization.Encoding.PEM,
+                                                  serialization.PublicFormat.SubjectPublicKeyInfo)):
+            raise ValueError("Private key does not match the certificate's public key")
+        key_type, key_params = _describe_private_key(key)
+        key_enc = keys.wrap_private_key(key)
+
+    self_signed = cert.subject == cert.issuer
+    if ca_type_override is not None:
+        ca_type = ca_type_override
+    elif self_signed:
+        ca_type = CAType.root
+    elif path_len == 0:
+        ca_type = CAType.issuing
+    else:
+        ca_type = CAType.intermediate
+
+    # Link to an existing parent CA whose subject matches this cert's issuer.
+    parent = None
+    if not self_signed:
+        for existing in db.execute(select(CertAuthority)).scalars():
+            if x509.load_pem_x509_certificate(existing.cert_pem.encode()).subject == cert.issuer:
+                parent = existing
+                break
+
+    ca = CertAuthority(
+        name=name,
+        ca_type=ca_type,
+        parent_id=parent.id if parent else None,
+        subject_dn=dn_to_str(cert.subject),
+        cert_pem=cert.public_bytes(serialization_encoding()).decode(),
+        key_enc=key_enc,
+        key_type=key_type,
+        key_params=key_params,
+        # Start well above typical externally-issued serials to avoid collisions.
+        serial_counter=0x1000000,
+        not_before=_aware(cert.not_valid_before_utc),
+        not_after=_aware(cert.not_valid_after_utc),
+        path_len=path_len,
+    )
+    db.add(ca)
+    db.flush()
+    return ca
+
+
+def _aware(dt):
+    from datetime import timezone
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _describe_public_key(pub):
+    if isinstance(pub, ec.EllipticCurvePublicKey):
+        return "ec", pub.curve.name
+    if isinstance(pub, rsa.RSAPublicKey):
+        return "rsa", str(pub.key_size)
+    return "unknown", ""
+
+
+def _describe_private_key(key):
+    if isinstance(key, ec.EllipticCurvePrivateKey):
+        return "ec", key.curve.name
+    if isinstance(key, rsa.RSAPrivateKey):
+        return "rsa", str(key.key_size)
+    return "unknown", ""
+
+
+# --------------------------------------------------------------------------- #
 # Chain helpers
 # --------------------------------------------------------------------------- #
 def chain_pem(db: Session, ca: CertAuthority) -> str:

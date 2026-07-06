@@ -74,6 +74,26 @@
   </form>
   <p class="muted">CA private keys are AES-256-GCM encrypted at rest and never exported.</p>
 </div>
+
+<div class="card">
+  <h3>Import existing CA</h3>
+  <form method="post" action="/pki/ca/import">
+    <div class="row">
+      <div><label>Name</label><input name="name" required></div>
+      <div><label>Type <span class="muted">(blank = auto-detect)</span></label>
+        <select name="ca_type"><option value="">— auto —</option>
+        {% for t in ca_types %}<option value="{{ t.value }}">{{ t.value }}</option>{% endfor %}</select>
+      </div>
+    </div>
+    <label>CA certificate (PEM)</label>
+    <textarea name="cert_pem" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+    <label>CA private key (PEM) <span class="muted">— required to issue certs; omit for cert-only (offline key)</span></label>
+    <textarea name="key_pem" placeholder="-----BEGIN PRIVATE KEY-----  (optional)"></textarea>
+    <button class="btn" style="margin-top:.8rem">Import CA</button>
+  </form>
+  <p class="muted">Imported keys are validated against the certificate and AES-256-GCM
+    encrypted at rest. If linked to an existing parent CA (issuer match), the hierarchy updates.</p>
+</div>
 {% endif %}
 
 <div class="card">
@@ -81,7 +101,7 @@
   <form method="post" action="/pki/sign">
     <label>Issuing CA</label>
     <select name="issuing_ca_id" required>
-      {% for c in cas if c.ca_type.value != 'root' %}
+      {% for c in cas if c.ca_type.value != 'root' and c.has_private_key %}
       <option value="{{ c.id }}">{{ c.name }} ({{ c.ca_type.value }})</option>{% endfor %}
     </select>
     <label>CSR (PEM)</label>

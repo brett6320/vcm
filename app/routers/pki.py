@@ -50,6 +50,23 @@ def create_ca(request: Request, name: str = Form(...), cn: str = Form(...),
     return RedirectResponse("/pki", status_code=303)
 
 
+@router.post("/ca/import")
+def import_ca(request: Request, name: str = Form(...), cert_pem: str = Form(...),
+              key_pem: str = Form(""), ca_type: str = Form(""),
+              db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    override = CAType(ca_type) if ca_type else None
+    try:
+        ca = ca_ops.import_ca(db, name=name, cert_pem=cert_pem, key_pem=key_pem or None,
+                              ca_type_override=override)
+    except Exception as e:  # noqa: BLE001
+        cas = db.execute(select(CertAuthority).order_by(CertAuthority.id)).scalars().all()
+        return render(request, "pki.html", error=f"Import failed: {e}", cas=cas, certs=[],
+                      ca_types=list(CAType), hierarchy=ca_ops.build_hierarchy(db))
+    audit(db, request, "pki.ca_import",
+          f"{ca.ca_type.value}:{name}{'' if ca.has_private_key else ' (no key)'}", user=user)
+    return RedirectResponse("/pki", status_code=303)
+
+
 @router.get("/ca/{ca_id}/chain")
 def ca_chain(ca_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     ca = db.get(CertAuthority, ca_id)

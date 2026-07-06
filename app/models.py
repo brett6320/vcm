@@ -238,6 +238,11 @@ class CertAuthority(Base):
 
     parent: Mapped["CertAuthority | None"] = relationship(remote_side=[id])
 
+    @property
+    def has_private_key(self) -> bool:
+        # Imported CAs may be cert-only (key kept offline) — those can't sign.
+        return bool(self.key_enc)
+
 
 class Certificate(Base):
     __tablename__ = "certificates"
