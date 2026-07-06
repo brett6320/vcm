@@ -227,9 +227,17 @@ def import_site(text: str, name: str | None = None) -> dict:
         profile = _import_srx(text, name)
     vpn_only = extract_vpn_sections(text, vendor)
     review = None
-    if vendor in ("aws", "azure"):
-        review = ("Imported cloud gateway config — verify the parsed values, then "
-                  "generate the far-end (on-prem) config from this connection.")
+    if vendor == "aws":
+        review = ("Imported from an AWS 'Download Configuration' file — the IKE/IPsec "
+                  "proposal values in that file are examples and may NOT match the "
+                  "tunnel's actual policy. Verify the real proposals in the AWS console "
+                  "(VPC > Site-to-Site VPN) or via the API "
+                  "(describe-vpn-connections / the tunnel options) before generating "
+                  "the far-end config.")
+    elif vendor == "azure":
+        review = ("Imported Azure VPN gateway details — verify the IPsec/IKE policy in "
+                  "the Azure portal or via the API (az network vpn-connection show / "
+                  "the connection's ipsecPolicies), then generate the far-end config.")
     elif not profile.remote.public_ip and not profile.remote.protected_subnets:
         review = ("Could not parse endpoint details from this config — parameters "
                   "shown are defaults. Verify against the source before use.")
