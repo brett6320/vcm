@@ -360,7 +360,16 @@ routes also pass the source-IP allowlist.
 **Profile (`app/routers/profile.py`, prefix `/profile`)** — `GET /profile`,
 `POST /profile/contact`, `POST /profile/password`,
 `POST /profile/passkey/{id}/{rename,delete}`, `POST /profile/totp/reset`,
-`POST /profile/sessions/revoke-others`.
+`POST /profile/sessions/revoke-others`, and API-token management
+(`POST /profile/tokens/create`, `POST /profile/tokens/{id}/revoke`).
+
+**REST API (`app/routers/api.py`, prefix `/api`)** — a JSON surface
+authenticated with API **bearer tokens** (not the session cookie): `GET /api/whoami`,
+`GET /api/sites`, `GET /api/sites/{id}`, `GET /api/certificates`,
+`GET /api/pki/tree`, `GET /api/audit` (admin scope), and
+`POST /api/tokens/{id}/revoke` (write scope). Full reference — auth, scopes,
+the IP-allowlist caveat, per-endpoint curl/JSON examples and errors — is in
+[`docs/api.md`](docs/api.md).
 
 **Admin (`app/routers/admin.py`, prefix `/admin`, all admin-only)** — `GET /admin`,
 user management (`POST /admin/users`, `.../toggle`, `.../reset-mfa`,
@@ -485,5 +494,6 @@ and publish a release.
 - [`docs/pki.md`](docs/pki.md) — CA hierarchy, KEK envelope, import, signing, deletion rules.
 - [`docs/vendors.md`](docs/vendors.md) — vendor matrix, crypto catalog, SRX selectors, importer coverage.
 - [`docs/deployment.md`](docs/deployment.md) — Docker, compose overlays, proxies, Postgres TLS, CI/release.
+- [`docs/api.md`](docs/api.md) — the JSON REST API: bearer tokens, scopes, endpoint reference.
 </content>
 </invoke>
