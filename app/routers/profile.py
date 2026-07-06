@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import User, UserSession, WebAuthnCredential
-from ..security import mfa
+from ..models import ApiToken, TokenScope, User, UserSession, WebAuthnCredential, utcnow
+from ..security import apitokens, mfa
 from ..security.deps import audit, current_user
 from ..security.passwords import hash_password, verify_password
 from ..templates_env import render
@@ -18,12 +20,7 @@ router = APIRouter(prefix="/profile", tags=["profile"])
 @router.get("")
 def profile_home(request: Request, db: Session = Depends(get_db),
                  user: User = Depends(current_user)):
-    sessions = db.execute(
-        select(UserSession).where(UserSession.user_id == user.id)
-        .order_by(UserSession.created_at.desc())
-    ).scalars().all()
-    return render(request, "profile.html", passkeys=user.credentials, sessions=sessions,
-                  current_sid=request.state.session.id)
+    return _render(request, db, user)
 
 
 @router.post("/contact")
@@ -100,13 +97,64 @@ def revoke_others(request: Request, db: Session = Depends(get_db),
     return RedirectResponse("/profile", status_code=303)
 
 
+@router.post("/tokens/create")
+def create_token(request: Request, name: str = Form(...), scope: str = Form("read"),
+                 expires_days: str = Form(""),
+                 db: Session = Depends(get_db), user: User = Depends(current_user)):
+    label = name.strip()[:64]
+    if not label:
+        return _err(request, db, user, "Give the token a name")
+    try:
+        wanted = TokenScope(scope)
+    except ValueError:
+        return _err(request, db, user, "Unknown scope")
+    if wanted not in apitokens.allowed_scopes_for(user):
+        return _err(request, db, user,
+                    f"Your role cannot mint a '{wanted.value}' token")
+    expires_at = None
+    if expires_days.strip():
+        try:
+            days = int(expires_days)
+        except ValueError:
+            return _err(request, db, user, "Expiry must be a number of days")
+        if days > 0:
+            expires_at = utcnow() + timedelta(days=days)
+
+    plaintext = apitokens.generate_token()
+    tok = ApiToken(user_id=user.id, name=label, scope=wanted,
+                   token_hash=apitokens.hash_token(plaintext),
+                   prefix=apitokens.token_prefix(plaintext), expires_at=expires_at)
+    db.add(tok)
+    # Never log the plaintext — only the non-secret prefix/label.
+    audit(db, request, "apitoken.create", f"{label} ({wanted.value}, {tok.prefix})", user=user)
+    return _render(request, db, user, new_token=plaintext,
+                   notice=f"Token '{label}' created — copy it now; it won't be shown again.")
+
+
+@router.post("/tokens/{token_id}/revoke")
+def revoke_token(token_id: int, request: Request, db: Session = Depends(get_db),
+                 user: User = Depends(current_user)):
+    tok = db.get(ApiToken, token_id)
+    if not tok or tok.user_id != user.id:
+        raise HTTPException(404, "Not found")
+    if not tok.revoked:
+        tok.revoked = True
+        audit(db, request, "apitoken.revoke", f"{tok.name} ({tok.prefix})", user=user)
+    return RedirectResponse("/profile", status_code=303)
+
+
 def _render(request, db, user, **extra):
     sessions = db.execute(
         select(UserSession).where(UserSession.user_id == user.id)
         .order_by(UserSession.created_at.desc())
     ).scalars().all()
+    tokens = db.execute(
+        select(ApiToken).where(ApiToken.user_id == user.id)
+        .order_by(ApiToken.id.desc())
+    ).scalars().all()
     return render(request, "profile.html", passkeys=user.credentials, sessions=sessions,
-                  current_sid=request.state.session.id, **extra)
+                  current_sid=request.state.session.id, api_tokens=tokens,
+                  token_scopes=apitokens.allowed_scopes_for(user), **extra)
 
 
 def _err(request, db, user, msg):

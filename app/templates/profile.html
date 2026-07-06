@@ -74,6 +74,58 @@
 </div>
 
 <div class="card">
+  <h3>API tokens</h3>
+  <p class="muted">Bearer tokens for programmatic REST access under <code>/api/</code>.
+    They bypass the browser login/MFA but still honour the source-IP allowlist.</p>
+
+  {% if new_token %}
+  <div class="card" style="background:#123; border:1px solid #2a6;">
+    <p><strong>Your new token — copy it now. It will not be shown again.</strong></p>
+    <code class="token-plaintext" style="word-break:break-all; display:block; padding:.4rem 0">{{ new_token }}</code>
+    <p class="muted">Use it as <code>Authorization: Bearer {{ new_token[:12] }}…</code></p>
+  </div>
+  {% endif %}
+
+  <table>
+    <tr><th>Name</th><th>Prefix</th><th>Scope</th><th>Created</th><th>Last used</th>
+        <th>Expires</th><th>Status</th><th></th></tr>
+    {% for t in api_tokens %}
+    <tr>
+      <td>{{ t.name }}</td>
+      <td class="muted"><code>{{ t.prefix }}…</code></td>
+      <td>{{ t.scope.value }}</td>
+      <td class="muted">{{ t.created_at.strftime('%Y-%m-%d') }}</td>
+      <td class="muted">{{ t.last_used_at.strftime('%Y-%m-%d %H:%M') if t.last_used_at else '—' }}</td>
+      <td class="muted">{{ t.expires_at.strftime('%Y-%m-%d') if t.expires_at else 'never' }}</td>
+      <td><span class="badge">{{ t.status }}</span></td>
+      <td>
+        {% if t.status != 'revoked' %}
+        <form method="post" action="/profile/tokens/{{ t.id }}/revoke"
+              onsubmit="return confirm('Revoke token {{ t.name }}?');">
+          <button class="btn small danger">Revoke</button></form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">No API tokens yet.</td></tr>
+    {% endfor %}
+  </table>
+
+  <form method="post" action="/profile/tokens/create" style="margin-top:.6rem">
+    <div class="row3">
+      <div><label>Name</label><input name="name" placeholder="ci-automation" required></div>
+      <div><label>Scope</label>
+        <select name="scope">
+          {% for s in token_scopes %}<option value="{{ s.value }}">{{ s.value }}</option>{% endfor %}
+        </select></div>
+      <div><label>Expires in days (optional)</label>
+        <input name="expires_days" type="number" min="1" placeholder="never"></div>
+    </div>
+    <button class="btn" style="margin-top:.6rem">Create API token</button>
+  </form>
+</div>
+
+<div class="card">
   <h3>Active sessions</h3>
   <table>
     <tr><th>Started</th><th>Expires</th><th>IP</th><th>MFA</th><th></th></tr>

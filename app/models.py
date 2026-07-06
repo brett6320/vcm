@@ -64,6 +64,14 @@ class Role(str, enum.Enum):
     admin = "admin"
 
 
+class TokenScope(str, enum.Enum):
+    """Privilege level of an API token, independent of the owner's UI role.
+    Ordered read < write < admin (see security.apitokens for the ranking)."""
+    read = "read"
+    write = "write"
+    admin = "admin"
+
+
 class CAType(str, enum.Enum):
     root = "root"
     intermediate = "intermediate"
@@ -231,6 +239,47 @@ class IPAllowEntry(Base):
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ApiToken(Base):
+    """A bearer token for programmatic REST access (bypasses session cookies and
+    MFA — the token *is* the credential — but still honours the IP allowlist).
+
+    Only a SHA-256 hex digest of the secret is stored; the plaintext is shown to
+    the user exactly once at creation and is never persisted or logged. The secret
+    is high-entropy (secrets.token_urlsafe(32)), so a fast one-way hash is
+    sufficient — unlike low-entropy passwords, brute-forcing a 256-bit random
+    space is infeasible, so no slow KDF (argon2) is needed here.
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(64))  # human label
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)  # sha256 hex
+    # Non-secret display identifier (scheme + a few leading chars of the secret).
+    prefix: Mapped[str] = mapped_column(String(16))
+    scope: Mapped[TokenScope] = mapped_column(_enum_col(TokenScope), default=TokenScope.read)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    user: Mapped[User] = relationship()
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at is not None and ensure_aware(self.expires_at) < utcnow()
+
+    @property
+    def status(self) -> str:
+        if self.revoked:
+            return "revoked"
+        if self.is_expired:
+            return "expired"
+        return "active"
 
 
 # --------------------------------------------------------------------------- #
