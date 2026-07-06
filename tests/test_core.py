@@ -1908,3 +1908,23 @@ def test_digi_zip_import_and_bgp_prefix_extraction():
            "set policy-options prefix-list PL 10.1.0.0/24\nset system host-name fw\n")
     jk = imp.extract_vpn_sections(jun, "juniper_srx")
     assert "protocols bgp" in jk and "policy-options prefix-list" in jk and "host-name" not in jk
+
+
+def test_import_update_keeps_bgp():
+    from app.routers.sites import _imported_config
+    from app.srx.model import VpnProfile, Endpoint, Bgp
+    p = VpnProfile(name="t", vendor="juniper_srx",
+                   local=Endpoint("l", "1.1.1.1", "", ["10.1.0.0/24"]),
+                   remote=Endpoint("r", "2.2.2.2", "", ["10.2.0.0/24"]))
+    p.bgp = Bgp(enabled=True, local_as="65001", peer_as="65002",
+                peer_ip="169.254.0.2", networks=["10.1.0.0/24"])
+    # A structured-Junos excerpt omits BGP -> it gets appended.
+    raw = "set security ike gateway g address 2.2.2.2"
+    out = _imported_config(p, raw)
+    assert "autonomous-system 65001" in out and "neighbor 169.254.0.2" in out
+    # Not double-appended when already present.
+    assert _imported_config(p, raw + "\nset protocols bgp group g neighbor 169.254.0.2"
+                            ).count("neighbor 169.254.0.2") == 1
+    # Untouched when BGP is off.
+    p.bgp = Bgp(enabled=False)
+    assert _imported_config(p, raw) == raw
