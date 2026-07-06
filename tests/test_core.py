@@ -92,6 +92,31 @@ def test_vendor_options_use_platform_terminology():
     assert "ecp384" in ml  # MikroTik terminology
 
 
+def test_bgp_optional_and_per_platform():
+    from app.srx.model import Bgp
+    # Off by default → no BGP in output
+    p = _mk_profile()
+    assert "bgp" not in generators.generate(p).lower()
+    # Enabled on a BGP-capable platform (Juniper)
+    p.bgp = Bgp(enabled=True, local_as="65001", peer_as="65002", peer_ip="169.254.0.2",
+                networks=["10.1.0.0/24"])
+    cfg = generators.generate(p)
+    assert "autonomous-system 65001" in cfg and "peer-as 65002" in cfg
+    assert "neighbor 169.254.0.2" in cfg
+    # Cisco form
+    c = _mk_profile(vendor="cisco_firepower")
+    c.bgp = Bgp(enabled=True, local_as="65001", peer_as="65002", peer_ip="169.254.0.2")
+    assert "router bgp 65001" in generators.generate(c)
+    # Non-BGP platform (Digi) → note, not config
+    d = _mk_profile(vendor="digi")
+    d.bgp = Bgp(enabled=True, local_as="65001", peer_as="65002", peer_ip="169.254.0.2")
+    out = generators.generate(d)
+    assert "not supported" in out.lower()
+    # mirror swaps ASNs and neighbor/local for the far end
+    m = p.mirror("peer")
+    assert m.bgp.local_as == "65002" and m.bgp.peer_as == "65001"
+
+
 def test_all_vendors_generate():
     for v in ("juniper_srx", "digi", "cradlepoint", "pfsense", "fortinet",
               "palo_alto", "cisco_firepower", "strongswan", "mikrotik"):

@@ -14,7 +14,11 @@ def generate(profile: VpnProfile) -> str:
     fn = _REGISTRY.get(profile.vendor)
     if not fn:
         raise ValueError(f"No generator for vendor '{profile.vendor}'")
-    return fn(profile)
+    cfg = fn(profile)
+    if profile.bgp.enabled:
+        from .bgp import bgp_config
+        cfg += bgp_config(profile.vendor, profile)
+    return cfg
 
 
 # --------------------------------------------------------------------------- #
