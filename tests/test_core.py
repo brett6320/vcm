@@ -1383,3 +1383,77 @@ def test_pending_ca_regenerate_csr_and_discard():
         sid = sub.id
         db.delete(sub); db.flush()
         assert db.get(CertAuthority, sid) is None
+
+
+def test_dynamic_and_fqdn_endpoint_generation():
+    from app.srx import generators as g
+    from app.srx.model import VpnProfile, Endpoint
+
+    def mk(rip, vendor, rid="peer.example.com", ver="ikev2"):
+        p = VpnProfile(name="t", vendor=vendor,
+                       local=Endpoint("l", "198.51.100.1", "loc", ["10.1.0.0/24"]),
+                       remote=Endpoint("r", rip, rid, ["10.2.0.0/24"]))
+        p.phase1.ike_version = ver
+        return p
+
+    # Palo: ip / fqdn / dynamic keywords
+    assert "peer-address fqdn vpn.dyn.example.com" in g.generate(mk("vpn.dyn.example.com", "palo_alto"))
+    assert "peer-address dynamic" in g.generate(mk("", "palo_alto"))
+    assert "peer-address ip 203.0.113.1" in g.generate(mk("203.0.113.1", "palo_alto"))
+
+    # Fortinet: ddns vs dynamic dial-up
+    fort_fqdn = g.generate(mk("vpn.dyn.example.com", "fortinet"))
+    assert "set type ddns" in fort_fqdn and 'set remotegw-ddns "vpn.dyn.example.com"' in fort_fqdn
+    fort_dyn = g.generate(mk("", "fortinet"))
+    assert "set type dynamic" in fort_dyn and "set peertype any" in fort_dyn
+
+    # MikroTik: FQDN keeps /32; dynamic is passive wildcard
+    assert "address=vpn.dyn.example.com/32" in g.generate(mk("vpn.dyn.example.com", "mikrotik"))
+    assert "address=0.0.0.0/0 passive=yes" in g.generate(mk("", "mikrotik"))
+
+    # SRX: dynamic hostname; IKEv1 dynamic/FQDN needs aggressive mode
+    srx_dyn = g.generate(mk("", "juniper_srx"))
+    assert "dynamic hostname peer.example.com" in srx_dyn
+    assert "mode aggressive" in g.generate(mk("vpn.dyn.example.com", "juniper_srx", ver="ikev1"))
+    assert "mode aggressive" not in g.generate(mk("vpn.dyn.example.com", "juniper_srx", ver="ikev2"))
+
+    # strongSwan: %any + trap for dynamic
+    ss = g.generate(mk("", "strongswan"))
+    assert "remote_addrs = %any" in ss and "start_action = trap" in ss
+
+    # pfSense: dynamic -> 0.0.0.0
+    assert "Remote Gateway       : 0.0.0.0" in g.generate(mk("", "pfsense"))
+
+
+def test_aws_azure_reject_dynamic_endpoint():
+    from app.srx.model import VpnProfile, Endpoint, all_warnings
+
+    def endpoint_warn(p):
+        return [w for w in all_warnings(p) if w["kind"] == "endpoint"]
+
+    # Customer gateway (local) is a DDNS hostname, far-end is AWS -> flagged.
+    p = VpnProfile(name="t", vendor="juniper_srx",
+                   local=Endpoint("l", "vpn.ddns.example.com", "loc", ["10.1.0.0/24"]),
+                   remote=Endpoint("r", "52.10.20.30", "rem", ["10.2.0.0/24"]))
+    p.remote_vendor = "aws"
+    ws = endpoint_warn(p)
+    assert ws and ws[0]["severity"] == "broken" and "static public IP" in ws[0]["message"]
+
+    # Azure site with a blank (dynamic) customer address -> flagged.
+    p2 = VpnProfile(name="t", vendor="azure",
+                    local=Endpoint("l", "203.0.113.1", "loc", ["10.1.0.0/24"]),
+                    remote=Endpoint("r", "", "rem", ["10.2.0.0/24"]))
+    assert endpoint_warn(p2)
+
+    # No cloud involved -> a hostname endpoint is fine, no endpoint warning.
+    p3 = VpnProfile(name="t", vendor="juniper_srx",
+                    local=Endpoint("l", "203.0.113.1", "loc", ["10.1.0.0/24"]),
+                    remote=Endpoint("r", "vpn.x.com", "rem", ["10.2.0.0/24"]))
+    assert not endpoint_warn(p3)
+
+    # Cloud + static customer IP -> no warning.
+    p4 = VpnProfile(name="t", vendor="juniper_srx",
+                    local=Endpoint("l", "203.0.113.5", "loc", ["10.1.0.0/24"]),
+                    remote=Endpoint("r", "52.10.20.30", "rem", ["10.2.0.0/24"]))
+    p4.remote_vendor = "aws"
+    assert not endpoint_warn(p4)
