@@ -822,6 +822,48 @@ def test_pki_hierarchy_and_csr_sign():
         assert not hasattr(cert, "key_pem")
 
 
+def test_admin_delete_certificate_requires_serial():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, Certificate, CAType, utcnow
+    from app.pki import ca as ca_ops
+    from app.security.passwords import hash_password
+    import pyotp, re, datetime
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="del").first():
+                db.add(User(username="del", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+            root = ca_ops.create_ca(db, name="delroot", dn={"CN": "Del Root"},
+                                    ca_type=CAType.root, key_type="ec",
+                                    key_params="secp256r1", valid_days=3650)
+            now = utcnow()
+            cert = Certificate(ca_id=root.id, serial="DEADBEEF", subject_dn="CN=leaf",
+                               cert_pem="-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----",
+                               not_before=now, not_after=now + datetime.timedelta(days=1))
+            db.add(cert)
+            db.commit()
+            cid = cert.id
+        c.post("/login", data={"username": "del", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+
+        # Wrong serial: nothing deleted, error shown.
+        r = c.post(f"/pki/cert/{cid}/delete", data={"confirm_serial": "NOPE"})
+        assert "did not match" in r.text
+        with SessionLocal() as db:
+            assert db.get(Certificate, cid) is not None
+
+        # Correct serial: deleted.
+        r = c.post(f"/pki/cert/{cid}/delete", data={"confirm_serial": "DEADBEEF"},
+                   follow_redirects=False)
+        assert r.status_code == 303
+        with SessionLocal() as db:
+            assert db.get(Certificate, cid) is None
+
+
 def test_load_material_p12_and_pem():
     import datetime
     from cryptography import x509
