@@ -1222,3 +1222,54 @@ def test_edit_connection_requires_diff_approval():
         assert r.status_code == 303
         with SessionLocal() as db:
             assert json.loads(db.get(VpnConnection, cid).params_json)["remote"]["public_ip"] == "9.9.9.9"
+
+
+def test_reimport_offers_update_then_updates():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, Site, VpnConnection
+    from app.security.passwords import hash_password
+    import pyotp, re, json
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="imp").first():
+                db.add(User(username="imp", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        c.post("/login", data={"username": "imp", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+
+        cfg = ("set security ike proposal P authentication-method rsa-signatures\n"
+               "set security ike proposal P encryption-algorithm aes-256-cbc\n"
+               "set security ipsec vpn vpn-t1 ike gateway gw\n")
+        # Give it a stable name so the re-import matches by name.
+        r = c.post("/sites/import", data={"name": "SiteRX", "config_text": cfg},
+                   follow_redirects=False)
+        assert r.status_code == 303
+        sid = int(r.headers["location"].split("/")[-1])
+        with SessionLocal() as db:
+            n_before = db.query(VpnConnection).filter_by(site_id=sid).count()
+            n_sites = db.query(Site).count()
+
+        # Re-import same name → review page (update vs duplicate), nothing new yet.
+        r = c.post("/sites/import", data={"name": "SiteRX", "config_text": cfg})
+        assert "Update" in r.text and "duplicate" in r.text.lower()
+        with SessionLocal() as db:
+            assert db.query(Site).count() == n_sites          # no new site created
+
+        # Choose update → stays one site, connections upserted (not duplicated).
+        r = c.post("/sites/import", data={"name": "SiteRX", "config_text": cfg,
+                   "action": "update"}, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == f"/sites/{sid}"
+        with SessionLocal() as db:
+            assert db.query(Site).count() == n_sites
+            assert db.query(VpnConnection).filter_by(site_id=sid).count() == n_before
+
+        # Choose duplicate → a new site is created.
+        r = c.post("/sites/import", data={"name": "SiteRX", "config_text": cfg,
+                   "action": "duplicate"}, follow_redirects=False)
+        assert r.status_code == 303
+        with SessionLocal() as db:
+            assert db.query(Site).count() == n_sites + 1

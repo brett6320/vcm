@@ -214,9 +214,69 @@ def import_form(request: Request, user: User = Depends(current_user)):
     return render(request, "import.html")
 
 
+def _match_import_site(db: Session, parsed: dict, name: str) -> Site | None:
+    """Find an existing site the import likely refers to: by name/hostname, else
+    by a shared local public IP on any connection."""
+    cand = {n.strip().lower() for n in (name, parsed.get("hostname")) if n and n.strip()}
+    sites = db.execute(select(Site)).scalars().all()
+    for s in sites:
+        if s.name.lower() in cand:
+            return s
+    imported_ips = {item["profile"].local.public_ip for item in parsed["connections"]
+                    if item["profile"].local.public_ip}
+    if imported_ips:
+        for s in sites:
+            for c in s.connections:
+                if _profile(c).local.public_ip in imported_ips:
+                    return s
+    return None
+
+
+def _import_diff_sections(site: Site, parsed: dict, config_text: str) -> list[dict]:
+    """Per-connection before/after between the existing site and the import."""
+    by_name = {c.name: c for c in site.connections}
+    sections = []
+    for item in parsed["connections"]:
+        prof = item["profile"]
+        after = item.get("config") or config_text
+        ex = by_name.get(prof.name)
+        title = prof.name if ex else f"{prof.name} (new connection)"
+        sections.append(_diff_section(title, ex.generated_config if ex else "", after))
+    imported_names = {item["profile"].name for item in parsed["connections"]}
+    for c in site.connections:
+        if c.name not in imported_names:
+            sections.append(_diff_section(f"{c.name} (kept — not in import)",
+                                          c.generated_config or "", c.generated_config or ""))
+    return sections
+
+
+def _apply_import_update(db: Session, site: Site, parsed: dict, config_text: str) -> None:
+    """Upsert the imported connections into an existing site (matched by name)."""
+    by_name = {c.name: c for c in site.connections}
+    for item in parsed["connections"]:
+        prof = item["profile"]
+        after = item.get("config") or config_text
+        ex = by_name.get(prof.name)
+        if ex:
+            ex.params_json = json.dumps(prof.to_dict())
+            ex.generated_config = after
+            ex.needs_review = bool(item.get("review"))
+            ex.review_note = item.get("review")
+            ex.source = "imported"
+        else:
+            cname = _unique_conn_name(db, site.id, prof.name)
+            prof.name = cname
+            db.add(VpnConnection(site_id=site.id, name=cname, source="imported",
+                                 params_json=json.dumps(prof.to_dict()),
+                                 generated_config=after,
+                                 needs_review=bool(item.get("review")),
+                                 review_note=item.get("review")))
+    db.flush()
+
+
 @router.post("/import")
 async def do_import(request: Request, name: str = Form(""), config_text: str = Form(""),
-                    file: UploadFile = File(None),
+                    action: str = Form(""), file: UploadFile = File(None),
                     db: Session = Depends(get_db), user: User = Depends(current_user)):
     # A file upload (e.g. a pfSense config.xml backup) takes precedence over paste.
     if file is not None and file.filename:
@@ -229,11 +289,29 @@ async def do_import(request: Request, name: str = Form(""), config_text: str = F
     parsed = importer.import_site(config_text, name or None)
     if not parsed["connections"]:
         return render(request, "import.html", error="No VPN connections found in that config")
+
+    existing = _match_import_site(db, parsed, name)
+
+    # Re-importing a known site: preview the diff and let the user choose
+    # update (default) or duplicate, before anything is written.
+    if existing is not None and action == "":
+        sections = _import_diff_sections(existing, parsed, config_text)
+        return render(request, "import_review.html", site=existing, site_name=name,
+                      config_text=config_text, sections=sections,
+                      vendor=parsed["vendor"],
+                      any_changed=any(s["changed"] for s in sections))
+
+    if existing is not None and action == "update":
+        _apply_import_update(db, existing, parsed, config_text)
+        audit(db, request, "site.import_update",
+              f"{existing.name} ({len(parsed['connections'])} connections)", user=user)
+        return RedirectResponse(f"/sites/{existing.id}", status_code=303)
+
+    # No match, or the user chose to create a duplicate.
     site = Site(name=_unique_site_name(db, name or parsed["hostname"]),
                 vendor=Vendor(parsed["vendor"]), model=parsed["model"], source="imported")
     db.add(site)
     db.flush()
-    first_id = None
     for item in parsed["connections"]:
         profile = item["profile"]
         cname = _unique_conn_name(db, site.id, profile.name)
@@ -245,7 +323,6 @@ async def do_import(request: Request, name: str = Form(""), config_text: str = F
                              review_note=item.get("review"))
         db.add(conn)
         db.flush()
-        first_id = first_id or conn.id
     audit(db, request, "site.import",
           f"{parsed['vendor']}:{site.name} ({len(parsed['connections'])} connections)", user=user)
     # Land on the device page so all imported connections are visible.
