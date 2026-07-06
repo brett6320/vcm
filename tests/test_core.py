@@ -819,3 +819,28 @@ def test_pki_hierarchy_and_csr_sign():
         assert chain.count("BEGIN CERTIFICATE") == 2  # issuing + root
         # never export CA private key
         assert not hasattr(cert, "key_pem")
+
+
+def test_create_ca_under_keyless_parent_errors_cleanly():
+    # Importing a root cert-only (no key), then creating a child under it must
+    # raise a clear error — not blow up decrypting an empty key blob.
+    import pytest
+    from app.db import SessionLocal
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority
+    with SessionLocal() as db:
+        db.query(CertAuthority).delete()
+        db.commit()
+        # Build a self-signed root and import it WITHOUT its key.
+        root = ca_ops.create_ca(db, name="realroot", dn={"CN": "Real Root"},
+                                ca_type=CAType.root, key_type="ec",
+                                key_params="secp256r1", valid_days=3650)
+        cert_pem = root.cert_pem
+        db.query(CertAuthority).delete()
+        db.commit()
+        keyless = ca_ops.import_ca(db, name="offline", cert_pem=cert_pem, key_pem=None)
+        assert not keyless.has_private_key
+        with pytest.raises(ValueError, match="no private key"):
+            ca_ops.create_ca(db, name="sub", dn={"CN": "Sub"}, ca_type=CAType.intermediate,
+                             key_type="ec", key_params="secp256r1", valid_days=365,
+                             parent=keyless)
