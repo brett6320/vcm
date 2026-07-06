@@ -11,7 +11,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..models import User, WebAuthnChallenge, WebAuthnCredential
 from ..security import mfa, sessions
-from ..security.deps import audit, current_user, enforce_ip
+from ..security.deps import audit, current_user, enforce_ip, safe_next
 from ..security.passwords import verify_password
 from ..templates_env import render
 
@@ -26,30 +26,40 @@ def _set_cookie(resp, sid: str):
 
 # ------------------------------------------------------------------ login --- #
 @router.get("/login")
-def login_form(request: Request, _ip: str = Depends(enforce_ip)):
-    return render(request, "login.html")
+def login_form(request: Request, next: str = "", _ip: str = Depends(enforce_ip)):
+    return render(request, "login.html", next_url=safe_next(next) or "")
 
 
 @router.post("/login")
 def login(request: Request, username: str = Form(...), password: str = Form(...),
-          db: Session = Depends(get_db), ip: str = Depends(enforce_ip)):
+          next: str = Form(""), db: Session = Depends(get_db),
+          ip: str = Depends(enforce_ip)):
     user = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
     if not user or user.disabled or not verify_password(user.password_hash, password):
         audit(db, request, "login.fail", f"user={username}")
-        return render(request, "login.html", error="Invalid credentials")
+        return render(request, "login.html", error="Invalid credentials",
+                      next_url=safe_next(next) or "")
     sess = sessions.create_session(db, user, ip, mfa_ok=not user.has_mfa)
+    sess.next_url = safe_next(next)   # remember the originally-requested page
     audit(db, request, "login.password_ok", f"user={username}", user=user)
     if user.must_change_password:
         target = "/account/first-password"  # forced change before MFA
     elif user.has_mfa:
         target = "/mfa"
     elif s.is_dev:
-        target = "/"  # dev mode: skip forced enrollment
+        target = _consume_next(sess)  # dev mode: skip forced enrollment
     else:
         target = "/mfa/enroll"
     resp = RedirectResponse(target, status_code=303)
     _set_cookie(resp, sess.id)
     return resp
+
+
+def _consume_next(sess) -> str:
+    """Return the remembered next_url (and clear it), else the dashboard."""
+    target = safe_next(sess.next_url) or "/"
+    sess.next_url = None
+    return target
 
 
 @router.get("/logout")
@@ -113,7 +123,7 @@ def mfa_gate(request: Request, db: Session = Depends(get_db), _ip: str = Depends
     if not user:
         return RedirectResponse("/login", status_code=303)
     if sess.mfa_ok:
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse(_consume_next(sess), status_code=303)
     return render(request, "mfa.html", has_totp=user.totp_confirmed,
                   has_passkey=bool(user.credentials))
 
@@ -131,7 +141,7 @@ def mfa_totp(request: Request, code: str = Form(...), db: Session = Depends(get_
                       has_passkey=bool(user.credentials))
     sessions.mark_mfa_ok(db, sess)
     audit(db, request, "mfa.totp_ok", user=user)
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(_consume_next(sess), status_code=303)
 
 
 # ---------------------------------------------------- WebAuthn (passkey) --- #
@@ -176,7 +186,7 @@ async def passkey_auth_verify(request: Request, db: Session = Depends(get_db),
     db.delete(chal)
     sessions.mark_mfa_ok(db, sess)
     audit(db, request, "mfa.passkey_ok", user=user)
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "redirect": _consume_next(sess)})
 
 
 # ------------------------------------------------------- MFA enrollment --- #
@@ -211,7 +221,7 @@ def enroll_totp_confirm(request: Request, code: str = Form(...), db: Session = D
     user.totp_confirmed = True
     sessions.mark_mfa_ok(db, sess)
     audit(db, request, "mfa.totp_enrolled", user=user)
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse(_consume_next(sess), status_code=303)
 
 
 @router.post("/mfa/enroll/passkey/options")
@@ -251,4 +261,4 @@ async def enroll_passkey_verify(request: Request, db: Session = Depends(get_db),
     db.delete(chal)
     sessions.mark_mfa_ok(db, sess)
     audit(db, request, "mfa.passkey_enrolled", user=user)
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True, "redirect": _consume_next(sess)})

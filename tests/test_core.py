@@ -433,6 +433,37 @@ def test_change_remote_device_on_connection():
             assert db.get(VpnConnection, int(cid)).peer_connection_id is None
 
 
+def test_login_returns_to_targeted_page():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role
+    from app.security.passwords import hash_password
+    import pyotp, re
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="nav").first():
+                db.add(User(username="nav", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        # hit a protected page unauthenticated -> redirected to /login?next=...
+        r = c.get("/admin/backups", follow_redirects=False)
+        assert r.status_code == 303
+        assert r.headers["location"] == "/login?next=%2Fadmin%2Fbackups"
+        # login carries next through MFA and lands back on the target
+        c.post("/login", data={"username": "nav", "password": "pw123456",
+                               "next": "/admin/backups"}, follow_redirects=False)
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        r = c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()},
+                   follow_redirects=False)
+        assert r.headers["location"] == "/admin/backups"
+        # open-redirect targets are ignored
+        from app.security.deps import safe_next
+        assert safe_next("//evil.com") is None
+        assert safe_next("https://evil.com") is None
+        assert safe_next("/sites") == "/sites"
+
+
 def test_forced_password_change_flow():
     from fastapi.testclient import TestClient
     from app.main import app
