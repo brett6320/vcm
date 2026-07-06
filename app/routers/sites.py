@@ -232,13 +232,26 @@ def _match_import_site(db: Session, parsed: dict, name: str) -> Site | None:
     return None
 
 
+def _imported_config(prof: VpnProfile, raw: str) -> str:
+    """The config text to store/diff for an imported connection. Some importers
+    (e.g. the structured-Junos excerpt) omit BGP even when the profile captured
+    it — append the generated BGP so it isn't lost on import/update/diff."""
+    text = raw or ""
+    if prof.bgp.enabled and "bgp" not in text.lower():
+        from ..srx.bgp import bgp_config
+        extra = bgp_config(prof.vendor, prof)
+        if extra:
+            text = (text.rstrip("\n") + "\n" + extra.lstrip("\n")) if text else extra
+    return text
+
+
 def _import_diff_sections(site: Site, parsed: dict, config_text: str) -> list[dict]:
     """Per-connection before/after between the existing site and the import."""
     by_name = {c.name: c for c in site.connections}
     sections = []
     for item in parsed["connections"]:
         prof = item["profile"]
-        after = item.get("config") or config_text
+        after = _imported_config(prof, item.get("config") or config_text)
         ex = by_name.get(prof.name)
         title = prof.name if ex else f"{prof.name} (new connection)"
         sections.append(_diff_section(title, ex.generated_config if ex else "", after))
@@ -255,7 +268,7 @@ def _apply_import_update(db: Session, site: Site, parsed: dict, config_text: str
     by_name = {c.name: c for c in site.connections}
     for item in parsed["connections"]:
         prof = item["profile"]
-        after = item.get("config") or config_text
+        after = _imported_config(prof, item.get("config") or config_text)
         ex = by_name.get(prof.name)
         if ex:
             ex.params_json = json.dumps(prof.to_dict())
@@ -319,7 +332,8 @@ async def do_import(request: Request, name: str = Form(""), config_text: str = F
         profile.name = cname
         conn = VpnConnection(site_id=site.id, name=cname, source="imported",
                              params_json=json.dumps(profile.to_dict()),
-                             generated_config=item.get("config") or config_text,
+                             generated_config=_imported_config(profile,
+                                                               item.get("config") or config_text),
                              needs_review=bool(item.get("review")),
                              review_note=item.get("review"))
         db.add(conn)
