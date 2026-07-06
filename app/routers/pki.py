@@ -84,6 +84,35 @@ async def import_ca(request: Request, name: str = Form(...), cert_pem: str = For
     return RedirectResponse("/pki", status_code=303)
 
 
+@router.post("/ca/{ca_id}/delete")
+def delete_ca(ca_id: int, request: Request, confirm_name: str = Form(""),
+              cascade: str = Form(""), db: Session = Depends(get_db),
+              user: User = Depends(require_admin)):
+    """Delete a CA (admin-only). Requires re-typing the CA name. Refuses a CA
+    that still has sub-CAs or issued certs unless 'cascade' is checked, which
+    removes the whole subtree. This deletes the CA and its private key."""
+    ca = db.get(CertAuthority, ca_id)
+    if not ca:
+        raise HTTPException(404, "Not found")
+
+    def _back(error: str):
+        cas = db.execute(select(CertAuthority).order_by(CertAuthority.id)).scalars().all()
+        certs = db.execute(
+            select(Certificate).order_by(Certificate.id.desc()).limit(50)).scalars().all()
+        return render(request, "pki.html", error=error, cas=cas, certs=certs,
+                      ca_types=list(CAType), hierarchy=ca_ops.build_hierarchy(db))
+
+    if confirm_name.strip() != ca.name:
+        return _back("CA name confirmation did not match — nothing was deleted.")
+    try:
+        summary = ca_ops.delete_ca(db, ca, cascade=bool(cascade))
+    except ValueError as e:
+        return _back(str(e))
+    audit(db, request, "pki.ca_delete",
+          f"{summary['ca']} (+{summary['sub_cas']} sub-CA, {summary['certs']} certs)", user=user)
+    return RedirectResponse("/pki", status_code=303)
+
+
 @router.get("/ca/{ca_id}/chain")
 def ca_chain(ca_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     ca = db.get(CertAuthority, ca_id)

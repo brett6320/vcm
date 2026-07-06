@@ -954,3 +954,54 @@ def test_create_ca_under_keyless_parent_errors_cleanly():
             ca_ops.create_ca(db, name="sub", dn={"CN": "Sub"}, ca_type=CAType.intermediate,
                              key_type="ec", key_params="secp256r1", valid_days=365,
                              parent=keyless)
+
+
+def test_delete_ca_refuses_nonempty_and_cascades():
+    import pytest, datetime
+    from app.db import SessionLocal, init_db
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority, Certificate, utcnow
+    init_db()
+    with SessionLocal() as db:
+        db.query(Certificate).delete()
+        db.query(CertAuthority).delete()
+        db.commit()
+        root = ca_ops.create_ca(db, name="troot", dn={"CN": "T Root"}, ca_type=CAType.root,
+                                key_type="ec", key_params="secp256r1", valid_days=3650)
+        sub = ca_ops.create_ca(db, name="tsub", dn={"CN": "T Sub"},
+                               ca_type=CAType.issuing, key_type="ec",
+                               key_params="secp256r1", valid_days=1825, parent=root)
+        now = utcnow()
+        db.add(Certificate(ca_id=sub.id, serial="AA01", subject_dn="CN=leaf",
+                           cert_pem="x", not_before=now,
+                           not_after=now + datetime.timedelta(days=1)))
+        db.commit()
+
+        # Refuses to delete a root that has a sub-CA + cert without cascade.
+        with pytest.raises(ValueError, match="cascade"):
+            ca_ops.delete_ca(db, root, cascade=False)
+        assert db.get(CertAuthority, root.id) is not None
+
+        # Cascade removes the whole subtree and its issued certs.
+        summary = ca_ops.delete_ca(db, root, cascade=True)
+        assert summary["sub_cas"] == 1 and summary["certs"] == 1
+        db.commit()
+        assert db.query(CertAuthority).count() == 0
+        assert db.query(Certificate).count() == 0
+
+
+def test_delete_ca_leaf_no_cascade_needed():
+    from app.db import SessionLocal, init_db
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority, Certificate
+    init_db()
+    with SessionLocal() as db:
+        db.query(Certificate).delete()
+        db.query(CertAuthority).delete()
+        db.commit()
+        root = ca_ops.create_ca(db, name="lonely", dn={"CN": "Lonely"}, ca_type=CAType.root,
+                                key_type="ec", key_params="secp256r1", valid_days=3650)
+        rid = root.id
+        ca_ops.delete_ca(db, root)   # empty → no cascade required
+        db.commit()
+        assert db.get(CertAuthority, rid) is None

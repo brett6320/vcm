@@ -14,7 +14,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..models import CAType, CertAuthority, Certificate, CertStatus, utcnow
@@ -243,6 +243,51 @@ def _describe_private_key(key):
 
 # --------------------------------------------------------------------------- #
 # Chain helpers
+def _descendant_cas(db: Session, ca: CertAuthority) -> list[CertAuthority]:
+    """All CAs beneath `ca` (children, grandchildren, …), deepest first."""
+    all_cas = db.execute(select(CertAuthority)).scalars().all()
+    by_parent: dict[int | None, list[CertAuthority]] = {}
+    for c in all_cas:
+        by_parent.setdefault(c.parent_id, []).append(c)
+    out: list[CertAuthority] = []
+
+    def walk(node: CertAuthority) -> None:
+        for child in by_parent.get(node.id, []):
+            walk(child)
+            out.append(child)  # children appended after their own descendants
+
+    walk(ca)
+    return out
+
+
+def delete_ca(db: Session, ca: CertAuthority, *, cascade: bool = False) -> dict:
+    """Delete a CA. Refuses a CA that still has child CAs or issued certificates
+    unless `cascade` is set, in which case the whole subtree (child CAs + their
+    issued certs) is removed too. Returns a summary of what was deleted."""
+    descendants = _descendant_cas(db, ca)
+    subtree_ids = [ca.id] + [d.id for d in descendants]
+    cert_count = db.execute(
+        select(func.count()).select_from(Certificate)
+        .where(Certificate.ca_id.in_(subtree_ids))
+    ).scalar_one()
+
+    if (descendants or cert_count) and not cascade:
+        raise ValueError(
+            f"CA '{ca.name}' still has {len(descendants)} sub-CA(s) and "
+            f"{cert_count} issued certificate(s). Enable cascade to delete the "
+            "whole subtree, or remove those first."
+        )
+
+    # Delete issued certs in the subtree, then CAs deepest-first, then the CA.
+    if cert_count:
+        db.execute(delete(Certificate).where(Certificate.ca_id.in_(subtree_ids)))
+    for d in descendants:  # already deepest-first
+        db.delete(d)
+    db.delete(ca)
+    db.flush()
+    return {"ca": ca.name, "sub_cas": len(descendants), "certs": int(cert_count)}
+
+
 # --------------------------------------------------------------------------- #
 def chain_pem(db: Session, ca: CertAuthority) -> str:
     """Return CA cert + all issuers up to the root, in leaf->root order."""
