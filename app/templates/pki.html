@@ -9,9 +9,20 @@
     <span class="muted">{{ n.subject }}</span>
     <span class="muted">· {{ n.key }}{% if n.path_len is not none %} · pathlen:{{ n.path_len }}{% endif %}
       · exp {{ n.not_after[:10] }}</span>
+    {% if n.locked %}<span class="badge badge-issuing">🔒 locked</span>{% endif %}
     <a class="tree-link" href="/pki/ca/{{ n.id }}/cert">cert</a>
     <a class="tree-link" href="/pki/ca/{{ n.id }}/chain">chain</a>
     {% if admin %}
+    {% if n.locked %}
+    <form method="post" action="/pki/ca/{{ n.id }}/lock" style="display:inline">
+      <input type="hidden" name="locked" value="">
+      <button class="btn small">🔓 unlock</button>
+    </form>
+    {% else %}
+    <form method="post" action="/pki/ca/{{ n.id }}/lock" style="display:inline">
+      <input type="hidden" name="locked" value="1">
+      <button class="btn small">🔒 lock</button>
+    </form>
     <details class="ca-del">
       <summary class="tree-link danger-link">delete</summary>
       <form method="post" action="/pki/ca/{{ n.id }}/delete" class="ca-del-form"
@@ -23,6 +34,7 @@
         <button class="btn small danger">Delete CA</button>
       </form>
     </details>
+    {% endif %}
     {% endif %}
   </div>
   {% if n.cas or n.certificates %}

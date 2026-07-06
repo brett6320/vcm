@@ -234,6 +234,8 @@ class CertAuthority(Base):
     not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     path_len: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Delete-protection: a locked CA must be unlocked before it can be deleted.
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     parent: Mapped["CertAuthority | None"] = relationship(remote_side=[id])
@@ -256,6 +258,8 @@ class Certificate(Base):
     cert_pem: Mapped[str] = mapped_column(Text)
     csr_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[CertStatus] = mapped_column(_enum_col(CertStatus), default=CertStatus.active)
+    # Delete-protection: a locked cert must be unlocked before it can be deleted.
+    locked: Mapped[bool] = mapped_column(Boolean, default=False)
     not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
