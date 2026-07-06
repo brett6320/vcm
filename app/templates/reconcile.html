@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Reconcile sites</h1>
+<p class="muted">Merge duplicate devices: connections move to the target site and the
+  source is deleted (peer links preserved). To pair the two ends of a tunnel across
+  sites, use <a href="/connections/relationships">Relationships</a> instead.</p>
+
+{% if dup_groups %}
+<div class="card">
+  <h3>Likely duplicates <span class="muted">(same name)</span></h3>
+  {% for g in dup_groups %}
+  <form method="post" action="/sites/merge" class="row3"
+        onsubmit="return confirm('Merge — this moves connections and deletes the source site.');"
+        style="align-items:end;margin-bottom:.6rem">
+    <div><label>Keep (target)</label>
+      <select name="target_id">
+        {% for s in g %}<option value="{{ s.id }}">{{ s.name }} ({{ s.vendor.label }}, {{ counts.get(s.id, 0) }} conns)</option>{% endfor %}
+      </select></div>
+    <div><label>Merge from (source, deleted)</label>
+      <select name="source_id">
+        {% for s in g %}<option value="{{ s.id }}">{{ s.name }} ({{ s.vendor.label }}, {{ counts.get(s.id, 0) }} conns)</option>{% endfor %}
+      </select></div>
+    <div><button class="btn danger">Merge</button></div>
+  </form>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card"><p class="muted">No same-name duplicate sites detected.</p></div>
+{% endif %}
+
+<div class="card">
+  <h3>Manual merge</h3>
+  <p class="muted">Pick any two sites to merge (e.g. a far-end stub that duplicates a real device).</p>
+  <form method="post" action="/sites/merge" class="row3"
+        onsubmit="return confirm('Merge — this moves connections and deletes the source site.');"
+        style="align-items:end">
+    <div><label>Keep (target)</label>
+      <select name="target_id">
+        {% for s in sites %}<option value="{{ s.id }}">{{ s.name }} ({{ s.vendor.label }}, {{ counts.get(s.id, 0) }} conns)</option>{% endfor %}
+      </select></div>
+    <div><label>Merge from (source, deleted)</label>
+      <select name="source_id">
+        {% for s in sites %}<option value="{{ s.id }}">{{ s.name }} ({{ s.vendor.label }}, {{ counts.get(s.id, 0) }} conns)</option>{% endfor %}
+      </select></div>
+    <div><button class="btn danger">Merge</button></div>
+  </form>
+</div>
+{% endblock %}

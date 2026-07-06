@@ -344,6 +344,47 @@ async def do_import(request: Request, name: str = Form(""), config_text: str = F
     return RedirectResponse(f"/sites/{site.id}", status_code=303)
 
 
+@router.get("/reconcile")
+def reconcile_page(request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(current_user)):
+    """Find likely-duplicate sites (same normalised name) and offer a merge."""
+    sites = db.execute(select(Site).order_by(Site.name)).scalars().all()
+    counts = dict(db.execute(
+        select(VpnConnection.site_id, func.count()).group_by(VpnConnection.site_id)).all())
+    groups: dict[str, list[Site]] = {}
+    for s in sites:
+        groups.setdefault(_norm_name(s.name), []).append(s)
+    dup_groups = [g for g in groups.values() if len(g) > 1]
+    return render(request, "reconcile.html", dup_groups=dup_groups, sites=sites, counts=counts)
+
+
+@router.post("/merge")
+def merge_sites(request: Request, target_id: int = Form(...), source_id: int = Form(...),
+                db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Merge one site into another: move its connections to the target, then
+    delete the now-empty source. Peer links are preserved."""
+    target = db.get(Site, target_id)
+    source = db.get(Site, source_id)
+    if not target or not source:
+        raise HTTPException(404, "Not found")
+    if target.id == source.id:
+        return RedirectResponse("/sites/reconcile", status_code=303)
+    moved = 0
+    for c in list(source.connections):
+        c.name = _unique_conn_name(db, target.id, c.name)
+        c.site_id = target.id
+        moved += 1
+    db.flush()
+    # Reload source so its (now-empty) connections collection doesn't cascade-delete
+    # the connections we just re-homed.
+    db.expire(source, ["connections"])
+    db.delete(source)
+    db.flush()
+    audit(db, request, "site.merge",
+          f"{source.name} -> {target.name} ({moved} connections)", user=user)
+    return RedirectResponse(f"/sites/{target.id}", status_code=303)
+
+
 @router.get("/{site_id}")
 def site_detail(site_id: int, request: Request, db: Session = Depends(get_db),
                 user: User = Depends(current_user)):
@@ -500,7 +541,10 @@ def _suggest_peers(db: Session, conn: VpnConnection, profile: VpnProfile) -> lis
         select(VpnConnection).where(VpnConnection.id != conn.id,
                                     VpnConnection.peer_connection_id.is_(None))
     ).scalars().all()
+    my_site = _norm_name(conn.site.name)
     for other in others:
+        if other.site_id == conn.site_id:
+            continue  # a tunnel's two ends live on different devices
         op = _profile(other)
         reasons, score = [], 0
         # Each side's remote gateway is the other's local public IP (both ways).
@@ -518,10 +562,28 @@ def _suggest_peers(db: Session, conn: VpnConnection, profile: VpnProfile) -> lis
         if _same_tunnel_subnet(profile.tunnel_ip, op.tunnel_ip):
             reasons.append("tunnel IPs share a subnet")
             score += 2
+        # Names cross-reference each device: my tunnel is named after the other's
+        # site, and its tunnel is named after mine (common in imported SRX configs
+        # where a tunnel is labelled by the far-end site).
+        if (_name_refs(conn.name, other.site.name) and _name_refs(other.name, conn.site.name)):
+            reasons.append("connection names cross-reference each site")
+            score += 2
         if reasons:
             out.append({"conn": other, "site": other.site, "reasons": reasons, "score": score})
     out.sort(key=lambda x: -x["score"])
     return out
+
+
+def _norm_name(s: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def _name_refs(conn_name: str, site_name: str) -> bool:
+    """True if a connection name references a site name (e.g. 'HESTIA-VPN' -> 'Hestia',
+    'CAN2501-VPN' -> 'CAN-2501'). Ignores tiny/ambiguous tokens."""
+    a, b = _norm_name(conn_name), _norm_name(site_name)
+    return len(b) >= 3 and (b in a or a in b)
 
 
 @conn_router.get("/{conn_id}/edit")

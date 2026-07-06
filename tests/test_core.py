@@ -2042,3 +2042,60 @@ def test_api_never_exposes_psk_or_token_hash():
         # Token hash / secret never exposed anywhere the API returns.
         who = c.get("/api/whoami", headers=H).text
         assert thash not in who and tok not in who
+
+
+def test_reciprocal_name_correlation_and_site_merge():
+    import json
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, Site, Vendor, VpnConnection
+    from app.srx.model import VpnProfile, Endpoint
+    from app.security.passwords import hash_password
+    import pyotp, re
+
+    def _mk(db, site, name):
+        prof = VpnProfile(name=name, vendor=site.vendor.value,
+                          local=Endpoint("l", "", "", ["10.0.0.0/24"]),
+                          remote=Endpoint("r", "", "", ["10.9.0.0/24"]))
+        c = VpnConnection(site_id=site.id, name=name, params_json=json.dumps(prof.to_dict()),
+                          generated_config="")
+        db.add(c); db.flush(); return c
+
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            db.query(VpnConnection).delete(); db.query(Site).delete(); db.commit()
+            if not db.query(User).filter_by(username="rec").first():
+                db.add(User(username="rec", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+            kkdds = Site(name="KKDDS", vendor=Vendor.juniper_srx, source="test")
+            hestia = Site(name="Hestia", vendor=Vendor.juniper_srx, source="test")
+            dup = Site(name="KK-DDS", vendor=Vendor.juniper_srx, source="test")  # normalizes to same
+            db.add_all([kkdds, hestia, dup]); db.flush()
+            # Cross-referencing tunnel names: on KKDDS a 'HESTIA-VPN', on Hestia a 'KKDDS-VPN'.
+            a = _mk(db, kkdds, "HESTIA-VPN")
+            _mk(db, hestia, "KKDDS-VPN")
+            _mk(db, dup, "orphan-tunnel")
+            db.commit()
+            aid, kid, did = a.id, kkdds.id, dup.id
+        c.post("/login", data={"username": "rec", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+
+        # Relationships surfaces the reciprocal-name pair.
+        rel = c.get("/connections/relationships").text
+        assert "HESTIA-VPN" in rel and "KKDDS-VPN" in rel
+        assert "cross-reference" in rel
+
+        # Reconcile detects the same-name KKDDS duplicate.
+        rec = c.get("/sites/reconcile").text
+        assert "Likely duplicates" in rec
+
+        # Merge the dup into the real KKDDS -> dup gone, its connection moved.
+        r = c.post("/sites/merge", data={"target_id": kid, "source_id": did},
+                   follow_redirects=False)
+        assert r.status_code == 303
+        with SessionLocal() as db:
+            assert db.get(Site, did) is None
+            assert db.query(VpnConnection).filter_by(name="orphan-tunnel").one().site_id == kid
