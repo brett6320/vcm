@@ -46,13 +46,13 @@
     <h3 style="margin-right:auto">Configuration — both sides</h3>
     {% if sides.is_junos %}
     <span class="muted" style="font-size:.8rem">Format:</span>
-    <a class="btn small" href="?fmt=orig"{% if fmt != 'set' %} style="opacity:.6"{% endif %}>Curly (original)</a>
     <a class="btn small" href="?fmt=set"{% if fmt == 'set' %} style="opacity:.6"{% endif %}>Set commands</a>
+    <a class="btn small" href="?fmt=curly"{% if fmt == 'curly' %} style="opacity:.6"{% endif %}>Curly braces</a>
     {% endif %}
     <a class="btn small" href="/connections/{{ conn.id }}/config">Download</a>
     <a class="btn small" href="/connections/{{ conn.id }}/far-end">Far-end (download)</a>
   </div>
-  <div class="row">
+  <div class="cfg-sxs">
     <div>
       <p class="muted">{{ sides.this_label }}</p>
       <pre>{{ sides.this_config }}</pre>

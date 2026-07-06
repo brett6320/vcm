@@ -47,6 +47,38 @@ def junos_curly_to_set(text: str) -> str:
     return "\n".join(out) + ("\n" if out else "")
 
 
+def junos_set_to_curly(text: str) -> str:
+    """Best-effort inverse of junos_curly_to_set: render `set` commands as a
+    brace hierarchy. A leaf whose children are all terminal tokens is collapsed
+    to `key value;`. Purely for display (comparison view), not for device use."""
+    import re
+    tree: dict = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line.startswith("set "):
+            continue
+        toks = re.findall(r'"[^"]*"|\S+', line)[1:]  # drop leading 'set'
+        node = tree
+        for t in toks:
+            node = node.setdefault(t, {})
+
+    def emit(node: dict, depth: int) -> list[str]:
+        pad = "    " * depth
+        lines: list[str] = []
+        for k, v in node.items():
+            if not v:
+                lines.append(f"{pad}{k};")
+            elif all(not child for child in v.values()):
+                lines.append(f"{pad}{k} " + " ".join(v.keys()) + ";")
+            else:
+                lines.append(f"{pad}{k} {{")
+                lines += emit(v, depth + 1)
+                lines.append(f"{pad}}}")
+        return lines
+
+    return "\n".join(emit(tree, 0)) + ("\n" if tree else "")
+
+
 def config_from_upload(data: bytes, filename: str = "") -> str:
     """Turn uploaded bytes into config text. A ZIP backup (e.g. Digi) is unzipped
     and the most config-like member is returned; otherwise the bytes are decoded."""

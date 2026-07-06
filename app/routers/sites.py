@@ -492,16 +492,17 @@ def presumed_relationships(request: Request, db: Session = Depends(get_db),
 
 
 def _fmt_config(vendor: str, text: str | None, fmt: str) -> str:
-    """Render config in the requested format. 'set' converts curly-brace Junos to
-    set-commands; 'orig' returns it as stored. Non-Junos is unaffected."""
+    """Render Junos config in the requested format so BOTH sides match: canonicalise
+    to set-commands, then to curly for the 'curly' view. Non-Junos is returned as-is."""
     t = text or ""
-    if fmt == "set" and vendor == "juniper_srx":
-        return importer.junos_curly_to_set(t)
-    return t
+    if vendor != "juniper_srx":
+        return t
+    as_set = importer.junos_curly_to_set(t)      # curly→set (set passes through)
+    return importer.junos_set_to_curly(as_set) if fmt == "curly" else as_set
 
 
 @conn_router.get("/{conn_id}")
-def connection_detail(conn_id: int, request: Request, fmt: str = "orig",
+def connection_detail(conn_id: int, request: Request, fmt: str = "set",
                       db: Session = Depends(get_db), user: User = Depends(current_user)):
     conn = db.get(VpnConnection, conn_id)
     if not conn:
@@ -524,7 +525,7 @@ def connection_detail(conn_id: int, request: Request, fmt: str = "orig",
             bgp_suggest = inferred.__dict__
 
     # Side-by-side: this side vs the far end (paired peer, else the on-the-fly mirror).
-    fmt = "set" if fmt == "set" else "orig"
+    fmt = "curly" if fmt == "curly" else "set"
     this_vendor = conn.site.vendor.value
     if peer:
         far_vendor = peer.site.vendor.value
@@ -547,7 +548,7 @@ def connection_detail(conn_id: int, request: Request, fmt: str = "orig",
         "this_config": _fmt_config(this_vendor, conn.generated_config, fmt),
         "far_label": far_label,
         "far_config": _fmt_config(far_vendor, far_raw, fmt),
-        "imported": _fmt_config(this_vendor, conn.imported_config, fmt) if conn.imported_config else None,
+        "imported": conn.imported_config or None,   # verbatim original, never reformatted
         "is_junos": this_vendor == "juniper_srx",
     }
     return render(request, "connection.html", conn=conn, site=conn.site,
