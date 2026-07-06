@@ -1621,7 +1621,13 @@ def test_import_leaf_cert_is_observed():
     c = _admin_client("leafimp")
     try:
         pem = _make_leaf_pem(cn="obs.example.com", days_valid=200, san=["obs.example.com"])
-        r = c.post("/pki/cert/import", data={"cert_pem": pem}, follow_redirects=False)
+        # Unknown issuer -> prompted to pick the signing CA.
+        r = c.post("/pki/cert/import", data={"cert_pem": pem})
+        assert "Which CA signed" in r.text
+        # Observe it as external (not in VCM) -> imported unlinked.
+        r = c.post("/pki/cert/import",
+                   data={"cert_pem": pem, "ca_prompted": "1", "signing_ca_id": "external"},
+                   follow_redirects=False)
         assert r.status_code == 303
         cid = int(r.headers["location"].split("/")[-1])
         with SessionLocal() as db:
