@@ -7,6 +7,33 @@
   <div class="card stat"><div class="num">{{ stats.sites }}</div>Sites (devices)</div>
   <div class="card stat"><div class="num">{{ stats.connections }}</div>VPN Connections</div>
 </div>
+<div class="grid">
+  <div class="card stat sev-critical"><div class="num">{{ stats.expiry_critical }}</div>
+    Critical (≤30 days / expired soon)</div>
+  <div class="card stat sev-warning"><div class="num">{{ stats.expiry_warning }}</div>
+    Warning (≤90 days)</div>
+  <div class="card stat"><div class="num">{{ stats.expiry_expired }}</div>Already expired</div>
+</div>
+<div class="card">
+  <h3>Expiring soon</h3>
+  {% if expiring %}
+  <table>
+    <tr><th>Serial</th><th>Subject</th><th>Type</th><th>Status</th><th>Expires</th><th>Days</th></tr>
+    {% for c in expiring %}
+    <tr>
+      <td><a href="/pki/cert/{{ c.id }}">{{ c.serial }}</a></td>
+      <td class="muted">{{ c.subject_dn }}</td>
+      <td>{{ 'managed' if c.managed else 'observed' }}</td>
+      <td><span class="badge badge-{{ c.expiry_status }}">{{ c.expiry_status }}</span></td>
+      <td>{{ c.not_after.date() }}</td>
+      <td>{{ c.days_until_expiry }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No certificates are expiring within 90 days. 🎉</p>
+  {% endif %}
+</div>
 <div class="card">
   <h3>Quick actions</h3>
   <a class="btn" href="/pki">Manage PKI</a>

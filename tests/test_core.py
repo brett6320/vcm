@@ -1544,3 +1544,131 @@ def test_import_ca_duplicate_name_is_clean_error():
                              key_type="ec", key_params="secp256r1", valid_days=3650)
         # session is still usable (no aborted transaction)
         assert db.query(CertAuthority).count() == 1
+
+
+def _make_leaf_pem(cn="leaf.example.com", days_valid=200, san=None):
+    """Build a self-signed end-entity (CA:FALSE) cert PEM for import tests."""
+    import datetime
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    key = ec.generate_private_key(ec.SECP256R1())
+    nm = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    b = (x509.CertificateBuilder().subject_name(nm).issuer_name(nm)
+         .public_key(key.public_key()).serial_number(0xABCDEF)
+         .not_valid_before(now - datetime.timedelta(days=1))
+         .not_valid_after(now + datetime.timedelta(days=days_valid))
+         .add_extension(x509.BasicConstraints(ca=False, path_length=None), True))
+    if san:
+        b = b.add_extension(x509.SubjectAlternativeName([x509.DNSName(d) for d in san]), False)
+    cert = b.sign(key, hashes.SHA256())
+    return cert.public_bytes(serialization.Encoding.PEM).decode()
+
+
+def test_expiry_classification_boundaries():
+    import datetime
+    from app.models import classify_expiry, utcnow
+    now = utcnow()
+    day = datetime.timedelta(days=1)
+    # Already past not_after -> expired
+    assert classify_expiry(now - day, now) == "expired"
+    # Within 30 days (inclusive) -> critical
+    assert classify_expiry(now + 5 * day, now) == "critical"
+    assert classify_expiry(now + 30 * day - datetime.timedelta(hours=1), now) == "critical"
+    # Between 30 and 90 days -> warning
+    assert classify_expiry(now + 31 * day, now) == "warning"
+    assert classify_expiry(now + 90 * day - datetime.timedelta(hours=1), now) == "warning"
+    # Beyond 90 days -> ok
+    assert classify_expiry(now + 120 * day, now) == "ok"
+
+
+def _admin_client(username):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role
+    from app.security.passwords import hash_password
+    import pyotp, re
+    c = TestClient(app, client=("127.0.0.1", 1))
+    c.__enter__()
+    with SessionLocal() as db:
+        if not db.query(User).filter_by(username=username).first():
+            db.add(User(username=username, password_hash=hash_password("pw123456"),
+                        role=Role.admin))
+            db.commit()
+    c.post("/login", data={"username": username, "password": "pw123456"})
+    sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+    c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+    return c
+
+
+def test_import_leaf_cert_is_observed():
+    from app.db import SessionLocal
+    from app.models import Certificate
+    c = _admin_client("leafimp")
+    try:
+        pem = _make_leaf_pem(cn="obs.example.com", days_valid=200, san=["obs.example.com"])
+        r = c.post("/pki/cert/import", data={"cert_pem": pem}, follow_redirects=False)
+        assert r.status_code == 303
+        cid = int(r.headers["location"].split("/")[-1])
+        with SessionLocal() as db:
+            cert = db.get(Certificate, cid)
+            assert cert.managed is False and cert.source == "imported"
+            assert cert.ca_id is None
+            assert "obs.example.com" in cert.subject_dn
+            assert cert.san and "obs.example.com" in cert.san
+            assert cert.expiry_status == "ok"
+        # A CA cert is rejected by the leaf import.
+        from app.pki import ca as ca_ops
+        with SessionLocal() as db:
+            root = ca_ops.create_ca(db, name="leafimp-ca", dn={"CN": "X"},
+                                    ca_type=ca_ops.CAType.root, key_type="ec",
+                                    key_params="secp256r1", valid_days=3650)
+            ca_pem = root.cert_pem
+            db.commit()
+        r = c.post("/pki/cert/import", data={"cert_pem": ca_pem})
+        assert "CA certificate" in r.text
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_dashboard_shows_expiring_counts_and_supersede_excludes():
+    import datetime
+    from app.db import SessionLocal
+    from app.models import Certificate, CertStatus, utcnow
+    c = _admin_client("dashexp")
+    try:
+        now = utcnow()
+        with SessionLocal() as db:
+            db.query(Certificate).delete()
+            db.commit()
+            crit = Certificate(ca_id=None, managed=False, source="imported", serial="C1",
+                               subject_dn="CN=crit", cert_pem="x", status=CertStatus.active,
+                               not_before=now, not_after=now + datetime.timedelta(days=10))
+            warn = Certificate(ca_id=None, managed=False, source="imported", serial="W1",
+                               subject_dn="CN=warn", cert_pem="x", status=CertStatus.active,
+                               not_before=now, not_after=now + datetime.timedelta(days=60))
+            okc = Certificate(ca_id=None, managed=True, source="issued", serial="OK1",
+                              subject_dn="CN=ok", cert_pem="x", status=CertStatus.active,
+                              not_before=now, not_after=now + datetime.timedelta(days=300))
+            db.add_all([crit, warn, okc])
+            db.commit()
+            crit_id, warn_id, ok_id = crit.id, warn.id, okc.id
+        page = c.get("/").text
+        assert "Expiring soon" in page
+        assert "CN=crit" in page and "CN=warn" in page
+        assert "CN=ok" not in page   # >90 days out, not listed
+
+        # Supersede the critical observed cert with the managed one -> excluded.
+        r = c.post(f"/pki/cert/{crit_id}/replace", data={"replacement_id": str(ok_id)},
+                   follow_redirects=False)
+        assert r.status_code == 303
+        with SessionLocal() as db:
+            assert db.get(Certificate, crit_id).replaced_by_id == ok_id
+        page2 = c.get("/").text
+        assert "CN=crit" not in page2      # superseded -> dropped from metrics
+        assert "CN=warn" in page2          # still tracked
+    finally:
+        c.__exit__(None, None, None)

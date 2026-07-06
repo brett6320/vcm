@@ -5,9 +5,11 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from cryptography import x509
+
 from ..config import get_settings
 from ..db import get_db
-from ..models import CAType, CertAuthority, Certificate, User
+from ..models import CAType, CertAuthority, Certificate, CertStatus, User, classify_expiry, utcnow
 from ..pki import ca as ca_ops
 from ..pki import csr as csr_ops
 from ..pki import material
@@ -264,14 +266,83 @@ async def sign_csr(request: Request, issuing_ca_id: int = Form(...), csr_pem: st
     return RedirectResponse(f"/pki/cert/{cert.id}", status_code=303)
 
 
+def _san_from_cert(cert: x509.Certificate) -> str | None:
+    try:
+        ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+    except x509.ExtensionNotFound:
+        return None
+    names = [g.value if hasattr(g, "value") else str(g) for g in ext.value]
+    return ",".join(str(n) for n in names) or None
+
+
+@router.post("/cert/import")
+async def import_cert(request: Request, cert_pem: str = Form(""),
+                      cert_file: UploadFile | None = File(None),
+                      db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Import a leaf (end-entity) certificate for observation only. Tracked for
+    expiry but not managed — VCM cannot renew/revoke it. Accepts pasted PEM or an
+    uploaded PEM/DER file."""
+    def _err(msg: str):
+        db.rollback()
+        cas = db.execute(select(CertAuthority).order_by(CertAuthority.id)).scalars().all()
+        certs = db.execute(
+            select(Certificate).order_by(Certificate.id.desc()).limit(50)).scalars().all()
+        return render(request, "pki.html", error=msg, cas=cas, certs=certs,
+                      ca_types=list(CAType), hierarchy=ca_ops.build_hierarchy(db))
+
+    try:
+        if cert_file is not None and cert_file.filename:
+            cert_pem = material.load_cert(await cert_file.read())
+        if not cert_pem.strip():
+            raise ValueError("Provide a certificate (paste PEM or upload a file)")
+        cert = x509.load_pem_x509_certificate(cert_pem.encode())
+        if _is_ca_cert(cert):
+            raise ValueError("This is a CA certificate — import it under 'Import existing CA'.")
+        not_after = ca_ops._aware(cert.not_valid_after_utc)
+        status = CertStatus.expired if classify_expiry(not_after) == "expired" \
+            else CertStatus.active
+        row = Certificate(
+            ca_id=None, managed=False, source="imported",
+            serial=format(cert.serial_number, "x"),
+            subject_dn=cert.subject.rfc4514_string(),
+            san=_san_from_cert(cert),
+            cert_pem=cert.public_bytes(ca_ops.serialization_encoding()).decode(),
+            status=status,
+            not_before=ca_ops._aware(cert.not_valid_before_utc),
+            not_after=not_after,
+        )
+        db.add(row)
+        db.flush()
+    except Exception as e:  # noqa: BLE001
+        return _err(f"Import failed: {e}")
+    audit(db, request, "pki.cert_import", f"serial={row.serial}:{row.subject_dn}", user=user)
+    return RedirectResponse(f"/pki/cert/{row.id}", status_code=303)
+
+
+def _is_ca_cert(cert: x509.Certificate) -> bool:
+    try:
+        return bool(cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca)
+    except x509.ExtensionNotFound:
+        return False
+
+
 @router.get("/cert/{cert_id}")
 def cert_detail(cert_id: int, request: Request, db: Session = Depends(get_db),
                 user: User = Depends(current_user)):
     cert = db.get(Certificate, cert_id)
     if not cert:
         raise HTTPException(404, "Not found")
-    fullchain = cert.cert_pem + "\n" + ca_ops.chain_pem(db, cert.ca)
-    return render(request, "cert.html", cert=cert, fullchain=fullchain)
+    fullchain = cert.cert_pem if cert.ca is None \
+        else cert.cert_pem + "\n" + ca_ops.chain_pem(db, cert.ca)
+    # Candidate managed certs to supersede an observed cert with (renewal link).
+    managed_certs = []
+    if not cert.managed and not cert.is_superseded:
+        managed_certs = db.execute(
+            select(Certificate).where(Certificate.managed.is_(True),
+                                      Certificate.id != cert.id)
+            .order_by(Certificate.id.desc())).scalars().all()
+    return render(request, "cert.html", cert=cert, fullchain=fullchain,
+                  managed_certs=managed_certs)
 
 
 @router.get("/cert/{cert_id}/pem")
@@ -295,7 +366,8 @@ def delete_cert(cert_id: int, request: Request, confirm_serial: str = Form(""),
         raise HTTPException(404, "Not found")
 
     def _back(error: str):
-        fullchain = cert.cert_pem + "\n" + ca_ops.chain_pem(db, cert.ca)
+        fullchain = cert.cert_pem if cert.ca is None \
+            else cert.cert_pem + "\n" + ca_ops.chain_pem(db, cert.ca)
         return render(request, "cert.html", cert=cert, fullchain=fullchain, error=error)
 
     if cert.locked:
@@ -320,4 +392,43 @@ def lock_cert(cert_id: int, request: Request, locked: str = Form(""),
     db.flush()
     audit(db, request, "pki.cert_lock" if cert.locked else "pki.cert_unlock",
           cert.serial, user=user)
+    return RedirectResponse(f"/pki/cert/{cert.id}", status_code=303)
+
+
+@router.post("/cert/{cert_id}/replace")
+def replace_cert(cert_id: int, request: Request, replacement_id: str = Form(""),
+                 db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Mark an observed (imported) certificate as superseded by a managed cert on
+    renewal. Sets replaced_by_id and drops the observed cert from expiry metrics.
+    Posting an empty replacement_id clears the link."""
+    cert = db.get(Certificate, cert_id)
+    if not cert:
+        raise HTTPException(404, "Not found")
+
+    def _back(error: str):
+        fullchain = cert.cert_pem if cert.ca is None \
+            else cert.cert_pem + "\n" + ca_ops.chain_pem(db, cert.ca)
+        managed_certs = db.execute(
+            select(Certificate).where(Certificate.managed.is_(True),
+                                      Certificate.id != cert.id)
+            .order_by(Certificate.id.desc())).scalars().all()
+        return render(request, "cert.html", cert=cert, fullchain=fullchain,
+                      managed_certs=managed_certs, error=error)
+
+    if cert.managed:
+        return _back("Only observed (imported) certificates can be superseded this way.")
+    if not replacement_id.strip():
+        cert.replaced_by_id = None
+        db.flush()
+        audit(db, request, "pki.cert_unsupersede", cert.serial, user=user)
+        return RedirectResponse(f"/pki/cert/{cert.id}", status_code=303)
+    repl = db.get(Certificate, int(replacement_id))
+    if not repl or not repl.managed:
+        return _back("Choose an existing managed certificate to supersede this one.")
+    if repl.id == cert.id:
+        return _back("A certificate cannot replace itself.")
+    cert.replaced_by_id = repl.id
+    db.flush()
+    audit(db, request, "pki.cert_supersede",
+          f"{cert.serial} -> {repl.serial}", user=user)
     return RedirectResponse(f"/pki/cert/{cert.id}", status_code=303)
