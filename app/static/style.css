@@ -103,6 +103,17 @@ pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow: a
 label.inline { display: inline-flex; align-items: center; gap: .3rem; margin: 0;
   font-size: .8rem; }
 
+/* Clickable lock-status chip that opens a CA action menu in the PKI tree. */
+.ca-actions { display: inline; }
+.status-chip { display: inline-block; cursor: pointer; padding: .05rem .5rem;
+  border-radius: 10px; font-size: .72rem; list-style: none; user-select: none; }
+.status-chip::-webkit-details-marker { display: none; }
+.status-chip.locked { background: var(--ok); color: #05210f; }
+.status-chip.unlocked { background: var(--warn); color: #111; }
+.ca-actions-menu { margin: .4rem 0 .2rem; padding: .5rem .6rem; border: 1px solid var(--border);
+  border-radius: 6px; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.ca-actions-menu form { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 0; }
+
 /* Side-by-side config diff (pre-apply approval). */
 .diff-wrap { overflow-x: auto; }
 table.diff { width: 100%; border-collapse: collapse; font-family: ui-monospace, monospace;

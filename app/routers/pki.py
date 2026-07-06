@@ -52,8 +52,56 @@ def create_ca(request: Request, name: str = Form(...), cn: str = Form(...),
         cas = db.execute(select(CertAuthority).order_by(CertAuthority.id)).scalars().all()
         return render(request, "pki.html", error=f"Create CA failed: {e}", cas=cas, certs=[],
                       ca_types=list(CAType), hierarchy=ca_ops.build_hierarchy(db))
+    if ca.pending:
+        audit(db, request, "pki.ca_csr_created", f"{ca.ca_type.value}:{name}", user=user)
+        return RedirectResponse(f"/pki/ca/{ca.id}", status_code=303)
     audit(db, request, "pki.ca_create", f"{ca.ca_type.value}:{name}", user=user)
     return RedirectResponse("/pki", status_code=303)
+
+
+@router.get("/ca/{ca_id}")
+def ca_detail(ca_id: int, request: Request, db: Session = Depends(get_db),
+              user: User = Depends(current_user)):
+    ca = db.get(CertAuthority, ca_id)
+    if not ca:
+        raise HTTPException(404, "Not found")
+    parent = db.get(CertAuthority, ca.parent_id) if ca.parent_id else None
+    chain = None if ca.pending else ca_ops.chain_pem(db, ca)
+    return render(request, "ca_detail.html", ca=ca, parent=parent, chain=chain)
+
+
+@router.get("/ca/{ca_id}/csr")
+def ca_csr(ca_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    ca = db.get(CertAuthority, ca_id)
+    if not ca or not ca.csr_pem:
+        raise HTTPException(404, "No pending CSR for this CA")
+    return PlainTextResponse(ca.csr_pem, media_type="application/pkcs10",
+                             headers={"Content-Disposition":
+                                      f'attachment; filename="{ca.name}.csr"'})
+
+
+@router.post("/ca/{ca_id}/complete")
+async def complete_ca(ca_id: int, request: Request, cert_pem: str = Form(""),
+                      cert_file: UploadFile | None = File(None),
+                      db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Upload the externally-signed certificate for a pending CA."""
+    ca = db.get(CertAuthority, ca_id)
+    if not ca:
+        raise HTTPException(404, "Not found")
+    try:
+        if cert_file is not None and cert_file.filename:
+            data = await cert_file.read()
+            up_cert, _ = material.load_material(cert_file.filename, data, None)
+            cert_pem = up_cert
+        if not cert_pem.strip():
+            raise ValueError("Provide the signed certificate (paste PEM or upload a file)")
+        ca_ops.complete_pending_ca(db, ca, cert_pem)
+    except (ValueError, TypeError) as e:
+        parent = db.get(CertAuthority, ca.parent_id) if ca.parent_id else None
+        return render(request, "ca_detail.html", ca=ca, parent=parent, chain=None,
+                      error=f"Could not complete CA: {e}")
+    audit(db, request, "pki.ca_completed", ca.name, user=user)
+    return RedirectResponse(f"/pki/ca/{ca.id}", status_code=303)
 
 
 @router.post("/ca/import")
@@ -133,6 +181,8 @@ def ca_chain(ca_id: int, db: Session = Depends(get_db), user: User = Depends(cur
     ca = db.get(CertAuthority, ca_id)
     if not ca:
         raise HTTPException(404, "Not found")
+    if ca.pending:
+        raise HTTPException(409, "CA is pending its signed certificate")
     return PlainTextResponse(ca_ops.chain_pem(db, ca), media_type="application/x-pem-file")
 
 
@@ -141,27 +191,36 @@ def ca_cert(ca_id: int, db: Session = Depends(get_db), user: User = Depends(curr
     ca = db.get(CertAuthority, ca_id)
     if not ca:
         raise HTTPException(404, "Not found")
+    if ca.pending or not ca.cert_pem:
+        raise HTTPException(409, "CA is pending its signed certificate")
     return PlainTextResponse(ca.cert_pem, media_type="application/x-pem-file")
 
 
 @router.post("/sign")
-def sign_csr(request: Request, issuing_ca_id: int = Form(...), csr_pem: str = Form(...),
-             valid_days: int = Form(825), san_dns: str = Form(""),
-             db: Session = Depends(get_db), user: User = Depends(current_user)):
+async def sign_csr(request: Request, issuing_ca_id: int = Form(...), csr_pem: str = Form(""),
+                   csr_file: UploadFile | None = File(None),
+                   valid_days: int = Form(825), san_dns: str = Form(""),
+                   db: Session = Depends(get_db), user: User = Depends(current_user)):
+    def _err(msg: str):
+        cas = db.execute(select(CertAuthority).order_by(CertAuthority.id)).scalars().all()
+        return render(request, "pki.html", error=msg, cas=cas, certs=[],
+                      ca_types=list(CAType), hierarchy=ca_ops.build_hierarchy(db))
+
     issuing = db.get(CertAuthority, issuing_ca_id)
     if not issuing:
-        return render(request, "pki.html", error="Issuing CA not found",
-                      cas=db.execute(select(CertAuthority)).scalars().all(), certs=[],
-                      ca_types=list(CAType))
+        return _err("Issuing CA not found")
     try:
+        # An uploaded CSR file takes precedence over pasted PEM.
+        if csr_file is not None and csr_file.filename:
+            csr_pem = (await csr_file.read()).decode(errors="ignore")
+        if not csr_pem.strip():
+            raise ValueError("Provide a CSR (paste PEM or upload a file)")
         csr = csr_ops.parse_csr(csr_pem)
         dns = [d.strip() for d in san_dns.split(",") if d.strip()]
         cert = ca_ops.sign_csr(db, issuing_ca=issuing, csr=csr, valid_days=valid_days,
                                san_dns=dns)
     except Exception as e:  # noqa: BLE001
-        cas = db.execute(select(CertAuthority)).scalars().all()
-        return render(request, "pki.html", error=str(e), cas=cas, certs=[],
-                      ca_types=list(CAType))
+        return _err(str(e))
     audit(db, request, "pki.sign_csr", f"serial={cert.serial}", user=user)
     return RedirectResponse(f"/pki/cert/{cert.id}", status_code=303)
 

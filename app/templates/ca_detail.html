@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/pki">← PKI</a></p>
+<h1>{{ ca.name }}
+  <span class="badge badge-{{ ca.ca_type.value }}">{{ ca.ca_type.value }}</span>
+  {% if ca.pending %}<span class="badge badge-intermediate">⏳ pending signature</span>
+  {% elif ca.locked %}<span class="badge badge-issuing">🔒 locked</span>{% endif %}
+</h1>
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+<div class="card">
+  <p><strong>Subject:</strong> {{ ca.subject_dn }}</p>
+  {% if parent %}<p><strong>Parent CA:</strong> <a href="/pki/ca/{{ parent.id }}">{{ parent.name }}</a></p>{% endif %}
+  <p><strong>Key:</strong> {{ ca.key_type }}:{{ ca.key_params }}
+    {% if not ca.has_private_key %}<span class="muted">(cert-only — key offline)</span>{% endif %}</p>
+  {% if not ca.pending %}
+  <p><strong>Valid:</strong> {{ ca.not_before.date() }} → {{ ca.not_after.date() }}</p>
+  <a class="btn small" href="/pki/ca/{{ ca.id }}/cert">Download cert</a>
+  <a class="btn small" href="/pki/ca/{{ ca.id }}/chain">Download chain</a>
+  {% endif %}
+</div>
+
+{% if ca.pending %}
+<div class="card">
+  <h3>⏳ Awaiting signed certificate</h3>
+  <p class="muted">This CA's key and a CSR have been generated. The parent CA
+    (<strong>{{ parent.name if parent else '—' }}</strong>) holds its signing key offline, so the
+    CSR must be signed externally. Download the CSR, have it signed by the parent, then upload
+    the signed certificate below. The CA becomes usable only once a matching, valid certificate
+    is uploaded.</p>
+  <a class="btn" href="/pki/ca/{{ ca.id }}/csr">Download CSR</a>
+  <h3 style="margin-top:1rem">Certificate signing request (PEM)</h3>
+  <pre>{{ ca.csr_pem }}</pre>
+
+  {% if user and user.role.value == 'admin' %}
+  <h3>Upload signed certificate</h3>
+  <form method="post" action="/pki/ca/{{ ca.id }}/complete" enctype="multipart/form-data">
+    <label>Upload file <span class="muted">— PEM (.pem/.crt/.cer)</span></label>
+    <input type="file" name="cert_file" accept=".pem,.crt,.cer">
+    <label>…or paste the signed certificate (PEM)</label>
+    <textarea name="cert_pem" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+    <button class="btn" style="margin-top:.6rem">Validate &amp; complete CA</button>
+  </form>
+  <p class="muted">The upload is validated: its public key must match this CA's generated key,
+    it must be a CA certificate, and its issuer must match the recorded parent.</p>
+  {% endif %}
+</div>
+{% else %}
+<div class="card"><h3>Chain (PEM)</h3><pre>{{ chain }}</pre></div>
+{% endif %}
+{% endblock %}

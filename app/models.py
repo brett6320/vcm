@@ -225,6 +225,7 @@ class CertAuthority(Base):
         ForeignKey("cert_authorities.id"), nullable=True
     )
     subject_dn: Mapped[str] = mapped_column(String(512))
+    # Empty while a CA is pending: we hold the key + CSR but no signed cert yet.
     cert_pem: Mapped[str] = mapped_column(Text)
     # Private key wrapped with KEK (AES-256-GCM: nonce||ciphertext). Never exported.
     key_enc: Mapped[bytes] = mapped_column(LargeBinary)
@@ -235,7 +236,11 @@ class CertAuthority(Base):
     not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     path_len: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Delete-protection: a locked CA must be unlocked before it can be deleted.
-    locked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # CAs are locked by default — deletion is a deliberate two-step action.
+    locked: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Pending CA: key + CSR generated, awaiting an externally-signed cert upload.
+    pending: Mapped[bool] = mapped_column(Boolean, default=False)
+    csr_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     parent: Mapped["CertAuthority | None"] = relationship(remote_side=[id])
@@ -244,6 +249,11 @@ class CertAuthority(Base):
     def has_private_key(self) -> bool:
         # Imported CAs may be cert-only (key kept offline) — those can't sign.
         return bool(self.key_enc)
+
+    @property
+    def can_sign(self) -> bool:
+        # Usable as an issuer only with a private key AND a signed cert in hand.
+        return bool(self.key_enc) and bool(self.cert_pem) and not self.pending
 
 
 class Certificate(Base):
