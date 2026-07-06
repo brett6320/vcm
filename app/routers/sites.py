@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..models import Site, User, Vendor, VpnConnection, generatable_vendors
 from ..security.deps import audit, current_user, require_admin
+import copy
+
 from ..srx import defaults as defaults_svc
+from ..srx import diff as diff_svc
 from ..srx import generators, importer, proposals, rename as rename_mod, suggest
 from ..srx.model import Bgp, Endpoint, Phase1, Phase2, VpnProfile, all_warnings
 from ..templates_env import render
@@ -63,6 +66,28 @@ def _save_profile(conn: VpnConnection, site: Site, profile: VpnProfile) -> None:
     suggest.fill_ike_ids(profile)
     conn.params_json = json.dumps(profile.to_dict())
     conn.generated_config = generators.generate(profile)
+
+
+def _preview_config(site: Site, profile: VpnProfile) -> str:
+    """Render what _save_profile *would* produce, without persisting anything."""
+    p = copy.deepcopy(profile)
+    p.vendor = site.vendor.value
+    suggest.fill_ike_ids(p)
+    return generators.generate(p)
+
+
+def _diff_section(title: str, before: str, after: str) -> dict:
+    return {"title": title, "before": before, "after": after,
+            "rows": diff_svc.side_by_side(before, after),
+            "changed": diff_svc.changed(before, after)}
+
+
+def _render_diff(request, *, title, action, sections, fields):
+    """Show a side-by-side before/after and require an explicit Apply.
+    `fields` is re-posted as hidden inputs alongside confirm=1."""
+    return render(request, "config_diff.html", diff_title=title, action=action,
+                  sections=sections, fields=fields,
+                  any_changed=any(s["changed"] for s in sections))
 
 
 def _vendor_catalog() -> dict:
@@ -388,6 +413,7 @@ def edit_connection(conn_id: int, request: Request,
                     bgp_local_ip: str = Form(""), bgp_networks: str = Form(""),
                     tunnel_interface: str = Form(""), wan_interface: str = Form(""),
                     tunnel_ip: str = Form(""), remote_vendor: str = Form(""),
+                    confirm: str = Form(""),
                     db: Session = Depends(get_db), user: User = Depends(current_user)):
     conn = db.get(VpnConnection, conn_id)
     if not conn:
@@ -408,6 +434,24 @@ def edit_connection(conn_id: int, request: Request,
     profile.bgp = _bgp_from_form(bgp_enabled, bgp_local_as, bgp_peer_as, bgp_peer_ip,
                                  bgp_local_ip, bgp_networks)
     _apply_interfaces(profile, tunnel_interface, wan_interface, tunnel_ip, remote_vendor)
+
+    # Show a side-by-side diff of the effective config change and require approval.
+    if confirm != "1":
+        section = _diff_section(f"{site.name} / {conn.name} ({site.vendor.label})",
+                                conn.generated_config or "", _preview_config(site, profile))
+        fields = dict(local_ip=local_ip, local_id=local_id, local_subnets=local_subnets,
+                      remote_ip=remote_ip, remote_id=remote_id, remote_subnets=remote_subnets,
+                      auth_method=auth_method, psk=psk, p1_enc=p1_enc, p1_integ=p1_integ,
+                      p1_dh=p1_dh, p1_ver=p1_ver, p2_enc=p2_enc, p2_integ=p2_integ,
+                      p2_pfs=p2_pfs, bgp_enabled=bgp_enabled, bgp_local_as=bgp_local_as,
+                      bgp_peer_as=bgp_peer_as, bgp_peer_ip=bgp_peer_ip,
+                      bgp_local_ip=bgp_local_ip, bgp_networks=bgp_networks,
+                      tunnel_interface=tunnel_interface, wan_interface=wan_interface,
+                      tunnel_ip=tunnel_ip, remote_vendor=remote_vendor, confirm="1")
+        return _render_diff(request, title=f"Review changes to {conn.name}",
+                            action=f"/connections/{conn.id}/edit", sections=[section],
+                            fields=fields)
+
     _save_profile(conn, site, profile)   # keeps the connection name, regenerates config
     db.flush()
     audit(db, request, "conn.edit", f"{site.name}/{conn.name}", user=user)
@@ -581,6 +625,7 @@ def _unpair(db: Session, conn: VpnConnection) -> None:
 
 @conn_router.post("/{conn_id}/pair-confirm")
 def pair_confirm(conn_id: int, request: Request, peer_id: int = Form(...),
+                 confirm: str = Form(""),
                  db: Session = Depends(get_db), user: User = Depends(current_user)):
     """Confirm an inferred pairing: link two existing, unpaired connections. Keeps
     each side's own crypto; sets peer platform and regenerates both configs."""
@@ -590,13 +635,27 @@ def pair_confirm(conn_id: int, request: Request, peer_id: int = Form(...),
         raise HTTPException(404, "Not found")
     if conn.peer_connection_id or peer.peer_connection_id:
         return RedirectResponse(f"/connections/{conn.id}", status_code=303)  # already paired
-    conn.peer_connection_id = peer.id
-    peer.peer_connection_id = conn.id
+
     cp = _profile(conn)
     cp.remote_vendor = peer.site.vendor.value
-    _save_profile(conn, conn.site, cp)
     pp = _profile(peer)
     pp.remote_vendor = conn.site.vendor.value
+
+    # Preview both sides' effective changes and require approval before applying.
+    if confirm != "1":
+        sections = [
+            _diff_section(f"{conn.site.name} / {conn.name} ({conn.site.vendor.label})",
+                          conn.generated_config or "", _preview_config(conn.site, cp)),
+            _diff_section(f"{peer.site.name} / {peer.name} ({peer.site.vendor.label})",
+                          peer.generated_config or "", _preview_config(peer.site, pp)),
+        ]
+        return _render_diff(request, title=f"Review pairing {conn.name} ↔ {peer.name}",
+                            action=f"/connections/{conn.id}/pair-confirm",
+                            sections=sections, fields={"peer_id": peer.id, "confirm": "1"})
+
+    conn.peer_connection_id = peer.id
+    peer.peer_connection_id = conn.id
+    _save_profile(conn, conn.site, cp)
     _save_profile(peer, peer.site, pp)
     db.flush()
     audit(db, request, "conn.pair_confirm", f"{conn.name}<->{peer.name}", user=user)
@@ -604,8 +663,8 @@ def pair_confirm(conn_id: int, request: Request, peer_id: int = Form(...),
 
 
 @conn_router.post("/{conn_id}/apply-bgp")
-def apply_inferred_bgp(conn_id: int, request: Request, db: Session = Depends(get_db),
-                       user: User = Depends(current_user)):
+def apply_inferred_bgp(conn_id: int, request: Request, confirm: str = Form(""),
+                       db: Session = Depends(get_db), user: User = Depends(current_user)):
     """Apply the inferred BGP peering to this connection and its paired peer."""
     conn = db.get(VpnConnection, conn_id)
     if not conn or not conn.peer_connection_id:
@@ -615,10 +674,24 @@ def apply_inferred_bgp(conn_id: int, request: Request, db: Session = Depends(get
     near_bgp = suggest.infer_bgp(cp, pp)
     if near_bgp:
         cp.bgp = near_bgp
-        _save_profile(conn, conn.site, cp)
-    peer_bgp = suggest.infer_bgp(_profile(peer), _profile(conn))  # re-read after save
+    peer_bgp = suggest.infer_bgp(pp, cp)
     if peer_bgp:
         pp.bgp = peer_bgp
+
+    if confirm != "1":
+        sections = [
+            _diff_section(f"{conn.site.name} / {conn.name} ({conn.site.vendor.label})",
+                          conn.generated_config or "", _preview_config(conn.site, cp)),
+            _diff_section(f"{peer.site.name} / {peer.name} ({peer.site.vendor.label})",
+                          peer.generated_config or "", _preview_config(peer.site, pp)),
+        ]
+        return _render_diff(request, title=f"Review inferred BGP for {conn.name} ↔ {peer.name}",
+                            action=f"/connections/{conn.id}/apply-bgp",
+                            sections=sections, fields={"confirm": "1"})
+
+    if near_bgp:
+        _save_profile(conn, conn.site, cp)
+    if peer_bgp:
         _save_profile(peer, peer.site, pp)
     db.flush()
     audit(db, request, "conn.bgp_inferred", f"{conn.name}<->{peer.name}", user=user)
