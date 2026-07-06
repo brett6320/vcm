@@ -440,6 +440,9 @@ def build_far_end(conn_id: int, request: Request,
         profile.remote.public_ip = existing.local.public_ip or profile.remote.public_ip
         if existing.local.protected_subnets:
             profile.remote.protected_subnets = existing.local.protected_subnets
+        # Each side learns the other's platform (drives SRX traffic-selectors).
+        peer_profile.remote_vendor = site.vendor.value
+        profile.remote_vendor = peer_site.vendor.value
         _save_profile(peer_conn, peer_site, peer_profile)   # update existing firewall
         _save_profile(conn, site, profile)                  # update our side to match
         conn.peer_connection_id = peer_conn.id
@@ -466,15 +469,18 @@ def build_far_end(conn_id: int, request: Request,
         peer_profile.local.public_ip = peer_public_ip
     if peer_ike_id:
         peer_profile.local.id = peer_ike_id
+    # Each side learns the other's platform (drives SRX traffic-selectors).
+    peer_profile.remote_vendor = site.vendor.value
     peer_conn = VpnConnection(site_id=peer_site.id, name=cname, source="generated",
                               params_json="{}")
     _save_profile(peer_conn, peer_site, peer_profile)
     db.add(peer_conn)
     db.flush()
-    # Point our side's remote at the new far-end's public IP if provided.
+    # Point our side's remote at the new far-end's public IP + record its platform.
+    profile.remote_vendor = peer_site.vendor.value
     if peer_public_ip:
         profile.remote.public_ip = peer_public_ip
-        _save_profile(conn, site, profile)
+    _save_profile(conn, site, profile)
     conn.peer_connection_id = peer_conn.id
     peer_conn.peer_connection_id = conn.id
     db.flush()
