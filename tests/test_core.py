@@ -1457,3 +1457,21 @@ def test_aws_azure_reject_dynamic_endpoint():
                     remote=Endpoint("r", "52.10.20.30", "rem", ["10.2.0.0/24"]))
     p4.remote_vendor = "aws"
     assert not endpoint_warn(p4)
+
+
+def test_import_ca_duplicate_name_is_clean_error():
+    import pytest
+    from app.db import SessionLocal, init_db
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority
+    init_db()
+    with SessionLocal() as db:
+        db.query(CertAuthority).delete(); db.commit()
+        ca_ops.create_ca(db, name="Uniq", dn={"CN": "Uniq"}, ca_type=CAType.root,
+                         key_type="ec", key_params="secp256r1", valid_days=3650)
+        db.commit()
+        with pytest.raises(ValueError, match="already exists"):
+            ca_ops.create_ca(db, name="Uniq", dn={"CN": "Uniq2"}, ca_type=CAType.root,
+                             key_type="ec", key_params="secp256r1", valid_days=3650)
+        # session is still usable (no aborted transaction)
+        assert db.query(CertAuthority).count() == 1

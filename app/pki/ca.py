@@ -43,6 +43,13 @@ def dn_to_str(name: x509.Name) -> str:
     return name.rfc4514_string()
 
 
+def _require_unique_name(db: Session, name: str) -> None:
+    """CA names are unique; fail with a clear message instead of a DB IntegrityError."""
+    if db.execute(select(CertAuthority).where(CertAuthority.name == name)
+                  ).scalar_one_or_none() is not None:
+        raise ValueError(f"A CA named '{name}' already exists — choose a different name.")
+
+
 def _next_serial(db: Session, ca: CertAuthority) -> int:
     serial = ca.serial_counter
     ca.serial_counter += 1
@@ -65,6 +72,7 @@ def create_ca(
     parent: CertAuthority | None = None,
     path_len: int | None = None,
 ) -> CertAuthority:
+    _require_unique_name(db, name)
     if ca_type != CAType.root and parent is None:
         raise ValueError("Intermediate/issuing CA requires a parent CA")
     if ca_type == CAType.root and parent is not None:
@@ -302,6 +310,7 @@ def import_ca(
 ) -> CertAuthority:
     from cryptography.hazmat.primitives import serialization
 
+    _require_unique_name(db, name)
     cert = x509.load_pem_x509_certificate(cert_pem.encode())
     # Must be a CA certificate.
     try:
