@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..models import Site, User, Vendor, VpnConnection
+from ..models import Site, User, Vendor, VpnConnection, generatable_vendors
 from ..security.deps import audit, current_user, require_admin
 from ..srx import defaults as defaults_svc
 from ..srx import generators, importer, proposals, rename as rename_mod, suggest
@@ -69,7 +69,7 @@ def _sites_page(request: Request, db: Session, **extra):
     ).all())
     d = defaults_svc.get_defaults(db)
     default_vendor = list(Vendor)[0].value
-    return render(request, "sites.html", sites=rows, counts=counts, vendors=list(Vendor),
+    return render(request, "sites.html", sites=rows, counts=counts, vendors=generatable_vendors(),
                   defaults=d, vopts=proposals.vendor_options(default_vendor),
                   vendor_catalog=_vendor_catalog(), default_vendor=default_vendor, **extra)
 
@@ -290,7 +290,7 @@ def connection_detail(conn_id: int, request: Request, db: Session = Depends(get_
                   profile=profile.to_dict(), warnings=all_warnings(profile), peer=peer,
                   peer_site=peer.site if peer else None, candidates=candidates,
                   sites=db.execute(select(Site).order_by(Site.name)).scalars().all(),
-                  vendors=list(Vendor), peer_suggest=mirror.to_dict())
+                  vendors=generatable_vendors(), peer_suggest=mirror.to_dict())
 
 
 @conn_router.get("/{conn_id}/config")
@@ -321,7 +321,7 @@ def far_end_view(conn_id: int, request: Request, vendor: str = "",
     config = generators.generate(peer)
     return render(request, "farend.html", conn=conn, site=conn.site, peer=peer.to_dict(),
                   vendor=peer.vendor, config=config, warnings=all_warnings(peer),
-                  vendors=list(Vendor))
+                  vendors=generatable_vendors())
 
 
 @conn_router.get("/{conn_id}/far-end.txt")

@@ -65,6 +65,8 @@ class Vendor(str, enum.Enum):
     palo_alto = "palo_alto"
     strongswan = "strongswan"
     mikrotik = "mikrotik"
+    aws = "aws"
+    azure = "azure"
 
     @property
     def label(self) -> str:
@@ -74,6 +76,12 @@ class Vendor(str, enum.Enum):
     @property
     def tested(self) -> bool:
         return self.value in _TESTED_VENDORS
+
+    @property
+    def import_only(self) -> bool:
+        # Cloud gateways: config is provider-managed. We import their config and
+        # generate the far-end (on-prem) side — we never emit a config for them.
+        return self.value in _IMPORT_ONLY_VENDORS
 
 
 _VENDOR_LABELS = {
@@ -86,10 +94,18 @@ _VENDOR_LABELS = {
     "palo_alto": "Palo Alto",
     "strongswan": "strongSwan",
     "mikrotik": "MikroTik",
+    "aws": "AWS VPN Gateway",
+    "azure": "Azure VPN Gateway",
 }
 
 # Only these are validated end-to-end; the rest are generated best-effort.
 _TESTED_VENDORS = {"juniper_srx", "cradlepoint"}
+# Import-only cloud gateways (no config generation).
+_IMPORT_ONLY_VENDORS = {"aws", "azure"}
+
+
+def generatable_vendors() -> list["Vendor"]:
+    return [v for v in Vendor if not v.import_only]
 
 
 # --------------------------------------------------------------------------- #

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .model import Endpoint, Phase1, Phase2, VpnProfile
+from .model import Bgp, Endpoint, Phase1, Phase2, VpnProfile
 from .proposals import DH_GROUPS, ENCRYPTION, INTEGRITY
 
 
@@ -86,6 +86,13 @@ def _extract_brace_blocks(text: str, names: tuple[str, ...]) -> str:
 
 
 def detect_vendor(text: str) -> str:
+    low = text.lower()
+    if ("virtual private gateway" in low or "amazon web services" in low
+            or "ipsec tunnel #" in low):
+        return "aws"
+    if ("microsoft azure" in low or "virtualnetworkgateway" in low
+            or "azure vpn" in low):
+        return "azure"
     if "set security ike" in text or "set security ipsec" in text:
         return "juniper_srx"
     # Structured (curly-brace) Junos: a `security { ... ike { ... } }` hierarchy.
@@ -212,11 +219,18 @@ def import_site(text: str, name: str | None = None) -> dict:
         profile.vendor = "strongswan"
     elif vendor == "mikrotik":
         profile = _import_mikrotik(text, name)
+    elif vendor == "aws":
+        profile = _import_aws(text, name)
+    elif vendor == "azure":
+        profile = _import_azure(text, name)
     else:
         profile = _import_srx(text, name)
     vpn_only = extract_vpn_sections(text, vendor)
     review = None
-    if not profile.remote.public_ip and not profile.remote.protected_subnets:
+    if vendor in ("aws", "azure"):
+        review = ("Imported cloud gateway config — verify the parsed values, then "
+                  "generate the far-end (on-prem) config from this connection.")
+    elif not profile.remote.public_ip and not profile.remote.protected_subnets:
         review = ("Could not parse endpoint details from this config — parameters "
                   "shown are defaults. Verify against the source before use.")
     return {"vendor": vendor, "model": profile.model or "", "hostname": name or profile.name,
@@ -628,6 +642,77 @@ def _import_cisco(text: str, name: str | None) -> VpnProfile:
         p1.auth_method = "psk"
     return VpnProfile(name=inferred or "imported-cisco", vendor=v, local=local,
                       remote=remote, phase1=p1, phase2=p2)
+
+
+def _norm_enc(s: str) -> str:
+    s = s.lower()
+    gcm = "gcm" in s
+    if "256" in s:
+        return "aes-256-gcm" if gcm else "aes-256-cbc"
+    if "192" in s:
+        return "aes-192-cbc"
+    if "128" in s:
+        return "aes-128-gcm" if gcm else "aes-128-cbc"
+    if "3des" in s:
+        return "3des"
+    return s
+
+
+def _norm_hash(s: str) -> str:
+    s = s.lower().replace("-", "")
+    for h in ("sha512", "sha384", "sha256", "sha1", "md5"):
+        if h in s:
+            return h
+    if "sha" in s:
+        return "sha1"
+    return s
+
+
+def _import_aws(text: str, name: str | None) -> VpnProfile:
+    """Best-effort parse of an AWS 'Download Configuration' VPN config (tunnel #1)."""
+    p1, p2 = Phase1(), Phase2()
+    local, remote = Endpoint(name="local"), Endpoint(name="remote")
+    p1.auth_method = "psk"
+    if m := re.search(r"Virtual Private Gateway\s*:?\s*([\d.]+)\b", text):
+        remote.public_ip = m.group(1)
+    if m := re.search(r"^\s*[-*]?\s*Customer Gateway\s*:?\s*([\d.]+)\s*$", text, re.M):
+        local.public_ip = m.group(1)
+    if m := re.search(r"Encryption Algorithm\s*:?\s*([\w-]+)", text, re.I):
+        p1.encryption = p2.encryption = _norm_enc(m.group(1))
+    if m := re.search(r"Authentication Algorithm\s*:?\s*([\w-]+)", text, re.I):
+        p1.integrity = p2.integrity = _norm_hash(m.group(1))
+    if m := re.search(r"Diffie-?Hellman(?:\s*Group)?\s*:?\s*(\d+)", text, re.I):
+        p1.dh_group = p2.pfs_group = m.group(1)
+    if re.search(r"IKE\s*v?2|IKEv2", text, re.I):
+        p1.ike_version = "ikev2"
+    prof = VpnProfile(name=name or "aws-vpn", vendor="aws", local=local, remote=remote,
+                      phase1=p1, phase2=p2)
+    peer_as = re.search(r"Virtual Private Gateway ASN\s*:?\s*(\d+)", text, re.I)
+    local_as = re.search(r"Customer Gateway ASN\s*:?\s*(\d+)", text, re.I)
+    nbr = re.search(r"Neighbor IP Address\s*:?\s*([\d.]+)", text, re.I)
+    if peer_as:
+        prof.bgp = Bgp(enabled=True, peer_as=peer_as.group(1),
+                       local_as=local_as.group(1) if local_as else "",
+                       peer_ip=nbr.group(1) if nbr else "")
+    return prof
+
+
+def _import_azure(text: str, name: str | None) -> VpnProfile:
+    """Best-effort parse of Azure VPN gateway connection details."""
+    p1, p2 = Phase1(), Phase2()
+    local, remote = Endpoint(name="local"), Endpoint(name="remote")
+    p1.auth_method = "psk"
+    if m := re.search(r"(?:Gateway|VPN|Public)\s*IP(?:\s*Address)?\s*:?\s*([\d.]+)", text, re.I):
+        remote.public_ip = m.group(1)
+    if m := re.search(r"Encryption\s*:?\s*([\w-]+)", text, re.I):
+        p1.encryption = p2.encryption = _norm_enc(m.group(1))
+    if m := re.search(r"(?:Integrity|Hash|PRF)\s*:?\s*([\w-]+)", text, re.I):
+        p1.integrity = p2.integrity = _norm_hash(m.group(1))
+    prof = VpnProfile(name=name or "azure-vpn", vendor="azure", local=local, remote=remote,
+                      phase1=p1, phase2=p2)
+    if m := re.search(r"BGP ASN\s*:?\s*(\d+)", text, re.I):
+        prof.bgp = Bgp(enabled=True, peer_as=m.group(1))
+    return prof
 
 
 def _import_mikrotik(text: str, name: str | None) -> VpnProfile:

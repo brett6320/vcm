@@ -117,6 +117,50 @@ def test_bgp_optional_and_per_platform():
     assert m.bgp.local_as == "65002" and m.bgp.peer_as == "65001"
 
 
+AWS_CONFIG = """Amazon Web Services
+VPN Connection Configuration
+
+IPSec Tunnel #1
+================
+#1: Internet Key Exchange Configuration
+   - Encryption Algorithm     : AES-256
+   - Authentication Algorithm : SHA-256
+   - Perfect Forward Secrecy  : Diffie-Hellman Group 20
+   - Pre-Shared Key           : someverysecretkey
+#3: Tunnel Interface Configuration
+   Outside IP Addresses:
+   - Customer Gateway         : 203.0.113.5
+   - Virtual Private Gateway  : 52.10.20.30
+#4: Border Gateway Protocol (BGP) Configuration
+   - Customer Gateway ASN         : 65000
+   - Virtual Private Gateway ASN  : 64512
+   - Neighbor IP Address          : 169.254.10.1
+"""
+
+
+def test_aws_import_only_and_far_end():
+    from app.models import Vendor
+    from app.srx import importer, generators
+    assert Vendor.aws.import_only and Vendor.azure.import_only
+    assert Vendor.juniper_srx not in [v for v in Vendor if v.import_only]
+    site = importer.import_site(AWS_CONFIG)
+    assert site["vendor"] == "aws"
+    prof = site["connections"][0]["profile"]
+    assert prof.remote.public_ip == "52.10.20.30"
+    assert prof.phase1.encryption == "aes-256-cbc" and prof.phase1.integrity == "sha256"
+    assert prof.phase1.dh_group == "20"
+    assert prof.bgp.enabled and prof.bgp.peer_as == "64512" and prof.bgp.local_as == "65000"
+    assert site["connections"][0]["review"]  # flagged for review
+    # PSK is not stored
+    assert "someverysecretkey" not in str(prof.to_dict())
+    # far-end (on-prem) config generates from the mirrored profile
+    peer = prof.mirror("onprem")
+    peer.vendor = "juniper_srx"
+    assert "set security ike" in generators.generate(peer)
+    # generating for AWS itself just returns a note
+    assert "managed by AWS" in generators.generate(prof)
+
+
 def test_all_vendors_generate():
     for v in ("juniper_srx", "digi", "cradlepoint", "pfsense", "fortinet",
               "palo_alto", "cisco_firepower", "strongswan", "mikrotik"):
