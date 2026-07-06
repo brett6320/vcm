@@ -261,12 +261,17 @@ def _swanctl_conf(p: VpnProfile, v: str, banner: str) -> str:
 # pfSense — GUI field values (VPN > IPsec > Tunnels). pfSense manages swanctl
 # itself from config.xml, so operators fill these fields in the web UI.
 # --------------------------------------------------------------------------- #
-def _pf_enc(canon: str) -> tuple[str, str]:
+def _pf_enc(canon: str) -> tuple[str, str, bool]:
+    # Returns (algorithm, key_length, is_icv). For AES-CBC the length is the cipher
+    # key size; for AES-GCM pfSense's "Key length" is the ICV/tag length (def 128).
     return {
-        "aes-256-cbc": ("AES", "256"), "aes-192-cbc": ("AES", "192"),
-        "aes-128-cbc": ("AES", "128"), "aes-256-gcm": ("AES256-GCM", ""),
-        "aes-128-gcm": ("AES128-GCM", ""), "3des": ("3DES", ""), "des": ("DES", ""),
-    }.get(canon, (canon.upper(), ""))
+        "aes-256-cbc": ("AES", "256", False), "aes-192-cbc": ("AES", "192", False),
+        "aes-128-cbc": ("AES", "128", False),
+        "aes-256-gcm": ("AES256-GCM", "128", True),
+        "aes-192-gcm": ("AES192-GCM", "128", True),
+        "aes-128-gcm": ("AES128-GCM", "128", True),
+        "3des": ("3DES", "", False), "des": ("DES", "", False),
+    }.get(canon, (canon.upper(), "", False))
 
 
 def _pf_hash(canon: str) -> str:
@@ -277,10 +282,15 @@ def _pf_hash(canon: str) -> str:
 def gen_pfsense(p: VpnProfile) -> str:
     n = p.name
     cert = p.phase1.auth_method == "certificate"
-    e1, k1 = _pf_enc(p.phase1.encryption)
-    e2, k2 = _pf_enc(p.phase2.encryption)
+    e1, k1, icv1 = _pf_enc(p.phase1.encryption)
+    e2, k2, icv2 = _pf_enc(p.phase2.encryption)
     gcm1 = "gcm" in p.phase1.encryption
     gcm2 = "gcm" in p.phase2.encryption
+
+    def _keylen(k, icv):
+        if not k:
+            return ""
+        return f"  Key length: {k} bits" + (" (ICV)" if icv else "")
     iface = p.wan_interface or "WAN"
     myid = f"Fully qualified domain name ({p.local.id})" if p.local.id else "My IP address"
     peerid = f"Fully qualified domain name ({p.remote.id})" if p.remote.id else "Peer IP address"
@@ -298,7 +308,7 @@ def gen_pfsense(p: VpnProfile) -> str:
         out.append(f"  My Certificate       : {n}-local")
     else:
         out.append("  Pre-Shared Key       : <set on device>")
-    out.append(f"  Encryption Algorithm : {e1}" + (f"  Key length: {k1} bits" if k1 else ""))
+    out.append(f"  Encryption Algorithm : {e1}" + _keylen(k1, icv1))
     if not gcm1:
         out.append(f"  Hash                 : {_pf_hash(p.phase1.integrity)}")
     out += [f"  DH Group             : {p.phase1.dh_group}",
@@ -309,7 +319,7 @@ def gen_pfsense(p: VpnProfile) -> str:
             f"  Local Network        : {(p.local.protected_subnets or ['0.0.0.0/0'])[0]}",
             f"  Remote Network       : {(p.remote.protected_subnets or ['0.0.0.0/0'])[0]}",
             "  Protocol             : ESP",
-            f"  Encryption Algorithms: {e2}" + (f"  Key length: {k2} bits" if k2 else "")]
+            f"  Encryption Algorithms: {e2}" + _keylen(k2, icv2)]
     if not gcm2:
         out.append(f"  Hash Algorithms      : {_pf_hash(p.phase2.integrity)}")
     out += [f"  PFS key group        : {p.phase2.pfs_group}",
