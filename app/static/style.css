@@ -147,3 +147,13 @@ tr.diff-replace td:last-child { background: color-mix(in srgb, var(--ok) 18%, tr
 .collapse-arrow { color: var(--muted); font-size: .8em; }
 .card.collapsed > :not(.card-head) { display: none; }
 .card.collapsed { padding-bottom: .6rem; }
+
+/* Compact scale: shrink Pico's rem-based sizing ~25% at every breakpoint.
+   Pico scales the root font up on wider screens; these mirror its breakpoints
+   at 0.75x so fonts, spacing and padding all come down proportionally. */
+:root { --pico-font-size: 75%; }
+@media (min-width: 576px)  { :root { --pico-font-size: 79.6875%; } }
+@media (min-width: 768px)  { :root { --pico-font-size: 84.375%; } }
+@media (min-width: 1024px) { :root { --pico-font-size: 89.0625%; } }
+@media (min-width: 1280px) { :root { --pico-font-size: 93.75%; } }
+@media (min-width: 1536px) { :root { --pico-font-size: 98.4375%; } }
