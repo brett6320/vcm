@@ -5,12 +5,58 @@
 <div class="card">
   <p><strong>Subject:</strong> {{ cert.subject_dn }}</p>
   <p><strong>SAN:</strong> {{ cert.san or '—' }}</p>
+  <p><strong>Type:</strong>
+     <span class="badge badge-{{ 'issuing' if cert.managed else 'intermediate' }}">
+       {{ 'managed' if cert.managed else 'observed' }}</span>
+     <span class="muted">source: {{ cert.source }}</span></p>
   <p><strong>Status:</strong> {{ cert.status.value }}
      {% if cert.locked %}<span class="badge badge-issuing">🔒 locked</span>{% endif %} &nbsp;
      <strong>Valid:</strong> {{ cert.not_before.date() }} → {{ cert.not_after.date() }}</p>
+  <p><strong>Expiry:</strong>
+     <span class="badge badge-{{ cert.expiry_status }}">{{ cert.expiry_status }}</span>
+     {% if cert.days_until_expiry >= 0 %}
+       <span class="muted">{{ cert.days_until_expiry }} day(s) remaining</span>
+     {% else %}
+       <span class="muted">expired {{ -cert.days_until_expiry }} day(s) ago</span>
+     {% endif %}
+     {% if cert.is_superseded %}
+       <span class="badge badge-ok">superseded by #{{ cert.replaced_by_id }}</span>
+     {% endif %}</p>
   <a class="btn small" href="/pki/cert/{{ cert.id }}/pem?fmt=cert">Download cert</a>
+  {% if cert.ca %}
   <a class="btn small" href="/pki/cert/{{ cert.id }}/pem?fmt=fullchain">Download full chain</a>
+  {% endif %}
 </div>
+
+{% if user and user.role.value == 'admin' and not cert.managed %}
+<div class="card">
+  <h3>Replace on renewal</h3>
+  {% if cert.is_superseded %}
+  <p class="muted">This observed certificate is superseded by managed certificate
+    <a href="/pki/cert/{{ cert.replaced_by_id }}">#{{ cert.replaced_by_id }}</a>. It is
+    excluded from expiry warnings. You can clear the link below.</p>
+  <form method="post" action="/pki/cert/{{ cert.id }}/replace">
+    <input type="hidden" name="replacement_id" value="">
+    <button class="btn small">Clear supersede link</button>
+  </form>
+  {% else %}
+  <p class="muted">Link this observed certificate to the managed certificate that
+    replaces it on renewal. Once linked it drops out of the dashboard expiry
+    warnings. Renew via the <a href="/pki">Sign appliance CSR</a> flow, then link the
+    result here.</p>
+  <form method="post" action="/pki/cert/{{ cert.id }}/replace">
+    <label>Replacement (managed) certificate</label>
+    <select name="replacement_id" required>
+      <option value="">— select a managed certificate —</option>
+      {% for m in managed_certs %}
+      <option value="{{ m.id }}">#{{ m.id }} · {{ m.serial }} · {{ m.subject_dn }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn small" style="margin-top:.6rem">Mark superseded</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
 <div class="card"><h3>Full chain (PEM)</h3><pre>{{ fullchain }}</pre></div>
 
 {% if user and user.role.value == 'admin' %}

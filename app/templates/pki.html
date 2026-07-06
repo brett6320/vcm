@@ -155,6 +155,19 @@
   <p class="muted">Imported keys are validated against the certificate and AES-256-GCM
     encrypted at rest. If linked to an existing parent CA (issuer match), the hierarchy updates.</p>
 </div>
+
+<div class="card">
+  <h3>Import leaf certificate <span class="muted">(observe only)</span></h3>
+  <form method="post" action="/pki/cert/import" enctype="multipart/form-data">
+    <label>Upload file <span class="muted">— PEM or DER (.pem/.crt/.cer/.der)</span></label>
+    <input type="file" name="cert_file" accept=".pem,.crt,.cer,.der">
+    <label>…or paste certificate (PEM)</label>
+    <textarea name="cert_pem" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+    <button class="btn" style="margin-top:.8rem">Import leaf certificate</button>
+  </form>
+  <p class="muted">An end-entity certificate is tracked for expiry only — VCM does
+    not manage (renew/revoke) it. CA certificates belong in "Import existing CA" above.</p>
+</div>
 {% endif %}
 
 <div class="card">
@@ -180,10 +193,13 @@
 <div class="card">
   <h3>Recent certificates</h3>
   <table>
-    <tr><th>Serial</th><th>Subject</th><th>Status</th><th>Expires</th><th></th></tr>
+    <tr><th>Serial</th><th>Subject</th><th>Type</th><th>Status</th><th>Expires</th><th></th></tr>
     {% for c in certs %}
     <tr><td>{{ c.serial }}</td><td class="muted">{{ c.subject_dn }}</td>
-        <td>{{ c.status.value }}</td><td>{{ c.not_after.date() }}</td>
+        <td>{{ 'managed' if c.managed else 'observed' }}</td>
+        <td>{{ c.status.value }}
+          <span class="badge badge-{{ c.expiry_status }}">{{ c.expiry_status }}</span></td>
+        <td>{{ c.not_after.date() }}</td>
         <td><a href="/pki/cert/{{ c.id }}">view</a></td></tr>
     {% endfor %}
   </table>
