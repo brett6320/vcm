@@ -103,6 +103,10 @@ def api_principal(request: Request, db: Session = Depends(get_db),
     row.last_used_at = utcnow()  # persisted by get_db's commit
     request.state.user = user
     request.state.api_token = row
+    # Record every authenticated API call, attributed to the user + token.
+    from .deps import audit
+    audit(db, request, "api.call",
+          f"token={row.prefix} {request.method} {request.url.path}", user=user)
     return row
 
 
