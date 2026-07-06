@@ -199,10 +199,17 @@ def test_srx_traffic_selectors_by_peer_platform():
     p.remote_vendor = "juniper_srx"
     out = generators.generate(p)
     assert ts_line not in out and "route-based" in out
-    # Policy-based peer (AWS) → traffic-selector config present
-    p.remote_vendor = "aws"
+    # pfSense peer REQUIRES matching traffic-selectors (policy-based)
+    p.remote_vendor = "pfsense"
     out = generators.generate(p)
-    assert "traffic-selector ts0 local-ip 10.1.0.0/24" in out and "policy-based" in out
+    assert "traffic-selector ts0 local-ip 10.1.0.0/24" in out
+    assert "REQUIRED" in out and "MUST match" in out
+    # AWS peer → traffic-selector config present
+    p.remote_vendor = "aws"
+    assert "traffic-selector ts0 local-ip 10.1.0.0/24" in generators.generate(p)
+    # Fortinet/Palo are route-based (VTI) → omit selectors
+    p.remote_vendor = "fortinet"
+    assert ts_line not in generators.generate(p)
     # Unspecified → safe default includes them
     p.remote_vendor = ""
     assert ts_line in generators.generate(p)
