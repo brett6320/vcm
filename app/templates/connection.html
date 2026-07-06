@@ -53,9 +53,16 @@
     <p>Paired with <a href="/connections/{{ peer.id }}">{{ peer.name }}</a>
       on <a href="/sites/{{ peer_site.id }}">{{ peer_site.name }}</a> — mirrored crypto.</p>
     <a class="btn small" href="/connections/{{ peer.id }}/config">Download peer config</a>
+    <form method="post" action="/connections/{{ conn.id }}/unpair" style="display:inline"
+          onsubmit="return confirm('Unpair from {{ peer.name }}? The peer connection is kept but unlinked.');">
+      <button class="btn small danger">Unpair</button></form>
+    <hr>
+    <p class="muted"><strong>Change remote device:</strong> pick a different existing connection or
+      create a new far-end below. Submitting replaces the current pairing.</p>
   {% else %}
   <p class="muted">Crypto is mirrored automatically (guaranteed interop). Pick an existing
     connection to pair with, or create a new far-end.</p>
+  {% endif %}
   <form method="post" action="/connections/{{ conn.id }}/peer">
     <label><input type="radio" name="target" value="new" checked style="width:auto"> Create a new far-end connection</label>
     <div class="row3" style="margin:.3rem 0 1rem;">
@@ -87,9 +94,10 @@
     </select>
     {% endif %}
 
-    <div style="margin-top:1rem;"><button class="btn">Generate both-ends configs</button></div>
+    <div style="margin-top:1rem;">
+      <button class="btn">{% if peer %}Change remote &amp; regenerate{% else %}Generate both-ends configs{% endif %}</button>
+    </div>
   </form>
-  {% endif %}
 </div>
 
 {% if user.role.value == 'admin' %}

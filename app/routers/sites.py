@@ -26,6 +26,13 @@ def _subnets(raw: str) -> list[str]:
     return [x.strip() for x in raw.replace("\n", ",").split(",") if x.strip()]
 
 
+def _slug(name: str) -> str:
+    """Connection names become device config object identifiers, so normalise to a
+    safe token (letters, digits, _.-) — spaces/other chars → hyphens."""
+    import re
+    return re.sub(r"[^A-Za-z0-9_.\-]+", "-", (name or "").strip()).strip("-")
+
+
 def _unique_site_name(db: Session, base: str) -> str:
     name, i = base, 2
     while db.execute(select(Site).where(Site.name == name)).scalar_one_or_none():
@@ -161,7 +168,7 @@ def generate_site(request: Request,
                 source="generated")
     db.add(site)
     db.flush()
-    cname = _unique_conn_name(db, site.id, conn_name or f"{name}-vpn")
+    cname = _unique_conn_name(db, site.id, _slug(conn_name) or f"{_slug(name)}-vpn")
     profile = _build_profile_from_form(db, cname, vendor, model, local_ip, local_id,
                                        local_subnets, remote_ip, remote_id, remote_subnets,
                                        auth_method, psk, p1_enc, p1_integ, p1_dh, p1_ver,
@@ -248,7 +255,7 @@ def add_connection(site_id: int, request: Request,
     errors = _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method, psk, local_ip)
     if errors:
         return site_detail(site_id, request, db, user)  # simple: reload page
-    cname = _unique_conn_name(db, site.id, conn_name or f"{site.name}-vpn")
+    cname = _unique_conn_name(db, site.id, _slug(conn_name) or f"{_slug(site.name)}-vpn")
     profile = _build_profile_from_form(db, cname, site.vendor.value, site.model or "",
                                        local_ip, local_id, local_subnets, remote_ip, remote_id,
                                        remote_subnets, auth_method, psk, p1_enc, p1_integ,
@@ -366,6 +373,8 @@ def build_far_end(conn_id: int, request: Request,
         raise HTTPException(404, "Not found")
     site = conn.site
     profile = _profile(conn)
+    # Re-pairing changes the remote device — drop any existing pairing first.
+    _unpair(db, conn)
 
     if target == "existing" and existing_conn_id:
         peer_conn = db.get(VpnConnection, int(existing_conn_id))
@@ -400,7 +409,7 @@ def build_far_end(conn_id: int, request: Request,
         db.add(peer_site)
         db.flush()
 
-    cname = _unique_conn_name(db, peer_site.id, peer_conn_name or f"{profile.name}-peer")
+    cname = _unique_conn_name(db, peer_site.id, _slug(peer_conn_name) or f"{profile.name}-peer")
     peer_profile = profile.mirror(cname)
     if peer_public_ip:
         peer_profile.local.public_ip = peer_public_ip
@@ -429,7 +438,7 @@ def rename_connection(conn_id: int, request: Request, new_name: str = Form(...),
     conn = db.get(VpnConnection, conn_id)
     if not conn:
         raise HTTPException(404, "Not found")
-    new_name = new_name.strip()
+    new_name = _slug(new_name)
     old = conn.name
     if not new_name or new_name == old:
         return RedirectResponse(f"/connections/{conn.id}", status_code=303)
@@ -452,6 +461,29 @@ def rename_connection(conn_id: int, request: Request, new_name: str = Form(...),
     audit(db, request, "conn.rename", f"{site.name}: {old} -> {new_name}", user=user)
     return render(request, "rename.html", conn=conn, site=site, old=old, new=new_name,
                   rename_syntax=rename_syntax)
+
+
+def _unpair(db: Session, conn: VpnConnection) -> None:
+    """Break the pairing between conn and its current peer (both directions)."""
+    if not conn.peer_connection_id:
+        return
+    peer = db.get(VpnConnection, conn.peer_connection_id)
+    if peer and peer.peer_connection_id == conn.id:
+        peer.peer_connection_id = None
+    conn.peer_connection_id = None
+
+
+@conn_router.post("/{conn_id}/unpair")
+def unpair_connection(conn_id: int, request: Request, db: Session = Depends(get_db),
+                      user: User = Depends(current_user)):
+    conn = db.get(VpnConnection, conn_id)
+    if not conn:
+        raise HTTPException(404, "Not found")
+    label = conn.name
+    _unpair(db, conn)
+    db.flush()
+    audit(db, request, "conn.unpair", label, user=user)
+    return RedirectResponse(f"/connections/{conn.id}", status_code=303)
 
 
 @conn_router.post("/{conn_id}/delete")
