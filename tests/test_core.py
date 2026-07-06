@@ -2199,3 +2199,21 @@ def test_junos_set_curly_roundtrip_and_view_consistency():
     set_in = "set security ike gateway gw address 1.1.1.1\n"
     assert _fmt_config("juniper_srx", curly_in, "set") == _fmt_config("juniper_srx", set_in, "set")
     assert _fmt_config("juniper_srx", curly_in, "curly") == _fmt_config("juniper_srx", set_in, "curly")
+
+
+def test_proposal_rows_side_by_side():
+    from app.srx.interop import proposal_rows
+    from app.srx.model import VpnProfile, Endpoint, Phase1, Phase2
+    a = VpnProfile(name="a", vendor="juniper_srx",
+                   local=Endpoint("l", "1", "", ["x"]), remote=Endpoint("r", "2", "", ["y"]),
+                   phase1=Phase1(integrity="sha256"), phase2=Phase2(integrity="sha256"))
+    b = VpnProfile(name="b", vendor="juniper_srx",
+                   local=Endpoint("l", "2", "", ["y"]), remote=Endpoint("r", "1", "", ["x"]),
+                   phase1=Phase1(integrity="sha384"), phase2=Phase2(integrity="sha384"))
+    groups = proposal_rows(a, b)
+    assert [g["section"] for g in groups] == ["Phase 1 (IKE)", "Phase 2 (IPsec)"]
+    flat = {r["label"]: r for g in groups for r in g["rows"]}
+    assert flat["Encryption"]["match"] is True
+    p1_integ = groups[0]["rows"][2]
+    assert p1_integ["label"] == "Integrity" and p1_integ["match"] is False
+    assert p1_integ["near"] == "sha256" and p1_integ["far"] == "sha384"
