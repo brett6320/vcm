@@ -394,6 +394,41 @@ def test_schema_sync_adds_missing_columns():
         os.path.exists(dbf) and os.remove(dbf)
 
 
+def test_backup_restore_roundtrip():
+    from app.db import SessionLocal, init_db
+    from app.models import User, Role, Backup
+    from app.security.passwords import hash_password
+    from app import backup as bk
+    init_db()
+    with SessionLocal() as db:
+        # baseline state
+        db.query(User).delete()
+        db.add(User(username="keep", password_hash=hash_password("x"), role=Role.admin,
+                    email="keep@example.com"))
+        db.commit()
+        snap = bk.create_backup(db, note="t", by="tester")
+        db.commit()
+        payload, ver = snap.payload, snap.version
+        assert ver >= 1
+        # mutate: add a user, change existing
+        db.add(User(username="temp", password_hash=hash_password("y"), role=Role.operator))
+        db.query(User).filter_by(username="keep").update({"email": "changed@example.com"})
+        db.commit()
+        assert db.query(User).count() == 2
+        # payload is encrypted (username not in plaintext bytes)
+        assert b"keep" not in payload
+        # restore
+        state, sha = bk.decode_payload(payload)
+        assert sha == snap.sha256
+        bk.restore_state(db, state)
+        db.commit()
+        users = {u.username: u for u in db.query(User).all()}
+        assert set(users) == {"keep"}                       # temp removed
+        assert users["keep"].email == "keep@example.com"    # change reverted
+        # backup history preserved across restore
+        assert db.query(Backup).count() >= 1
+
+
 def test_multiple_passkeys_per_user():
     from app.db import SessionLocal, init_db
     from app.models import User, WebAuthnCredential

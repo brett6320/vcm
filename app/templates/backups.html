@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Backups</h1>
+<p class="muted">Snapshots are <strong>AES-256-GCM encrypted</strong> with the app KEK — restorable
+  only on an instance with the same <code>VCM_KEK_B64</code>. Versions are never overwritten;
+  restoring takes an automatic safety snapshot first and signs everyone out.</p>
+
+<div class="card">
+  <h3>Create backup</h3>
+  <form method="post" action="/admin/backups/create" style="display:flex;gap:.5rem;align-items:end">
+    <div style="flex:1"><label>Note (optional)</label><input name="note" placeholder="e.g. before upgrade"></div>
+    <button class="btn">Create backup</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Versions</h3>
+  <table>
+    <tr><th>Version</th><th>Created</th><th>By</th><th>Note</th><th>Size</th><th></th></tr>
+    {% for b in backups %}
+    <tr>
+      <td>v{{ b.version }}</td>
+      <td class="muted">{{ b.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>{{ b.created_by or '—' }}</td>
+      <td class="muted">{{ b.note or '' }}</td>
+      <td>{{ '%.1f'|format(b.size/1024) }} KB</td>
+      <td style="white-space:nowrap">
+        <a class="btn small" href="/admin/backups/{{ b.id }}/download">Download</a>
+        <form method="post" action="/admin/backups/{{ b.id }}/restore" style="display:inline"
+              onsubmit="return confirm('Restore v{{ b.version }}? This REPLACES all current data (a safety snapshot is taken first) and signs everyone out.');">
+          <input type="hidden" name="confirm" value="RESTORE">
+          <button class="btn small danger">Restore</button></form>
+        <form method="post" action="/admin/backups/{{ b.id }}/delete" style="display:inline"
+              onsubmit="return confirm('Delete backup v{{ b.version }}?');">
+          <button class="btn small">Delete</button></form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <h3>Restore from file</h3>
+  <p class="muted">Upload a previously downloaded <code>.vcmbak</code> file (must decrypt with this
+    instance's KEK). A safety snapshot is taken first.</p>
+  <form method="post" action="/admin/backups/upload-restore" enctype="multipart/form-data"
+        onsubmit="return confirm('Restore from this file? This REPLACES all current data.');">
+    <input type="file" name="file" accept=".vcmbak" required>
+    <input type="hidden" name="confirm" value="RESTORE">
+    <button class="btn danger" style="margin-top:.6rem">Upload &amp; restore</button>
+  </form>
+</div>
+{% endblock %}
