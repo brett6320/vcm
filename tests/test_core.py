@@ -1526,3 +1526,21 @@ def test_relationships_page_and_tunnel_correlation():
         assert "a-t" in r.text and "b-t" in r.text
         assert "tunnel IPs share a subnet" in r.text
         assert "Review" in r.text
+
+
+def test_import_ca_duplicate_name_is_clean_error():
+    import pytest
+    from app.db import SessionLocal, init_db
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority
+    init_db()
+    with SessionLocal() as db:
+        db.query(CertAuthority).delete(); db.commit()
+        ca_ops.create_ca(db, name="Uniq", dn={"CN": "Uniq"}, ca_type=CAType.root,
+                         key_type="ec", key_params="secp256r1", valid_days=3650)
+        db.commit()
+        with pytest.raises(ValueError, match="already exists"):
+            ca_ops.create_ca(db, name="Uniq", dn={"CN": "Uniq2"}, ca_type=CAType.root,
+                             key_type="ec", key_params="secp256r1", valid_days=3650)
+        # session is still usable (no aborted transaction)
+        assert db.query(CertAuthority).count() == 1

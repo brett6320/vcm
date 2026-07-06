@@ -49,6 +49,7 @@ def create_ca(request: Request, name: str = Form(...), cn: str = Form(...),
                               ca_type=CAType(ca_type), key_type=key_type, key_params=key_params,
                               valid_days=valid_days, parent=parent)
     except (ValueError, TypeError) as e:
+        db.rollback()
         cas = db.execute(select(CertAuthority).order_by(CertAuthority.id)).scalars().all()
         return render(request, "pki.html", error=f"Create CA failed: {e}", cas=cas, certs=[],
                       ca_types=list(CAType), hierarchy=ca_ops.build_hierarchy(db))
@@ -98,6 +99,7 @@ async def complete_ca(ca_id: int, request: Request, cert_pem: str = Form(""),
             raise ValueError("Provide the signed certificate (paste PEM or upload a file)")
         ca_ops.complete_pending_ca(db, ca, cert_pem, allow_non_ca=bool(allow_non_ca))
     except (ValueError, TypeError) as e:
+        db.rollback()
         parent = db.get(CertAuthority, ca.parent_id) if ca.parent_id else None
         return render(request, "ca_detail.html", ca=ca, parent=parent, chain=None,
                       error=f"Could not complete CA: {e}")
@@ -115,6 +117,7 @@ def regenerate_csr(ca_id: int, request: Request, db: Session = Depends(get_db),
     try:
         ca_ops.regenerate_pending_csr(db, ca)
     except ValueError as e:
+        db.rollback()
         parent = db.get(CertAuthority, ca.parent_id) if ca.parent_id else None
         return render(request, "ca_detail.html", ca=ca, parent=parent, chain=None, error=str(e))
     audit(db, request, "pki.ca_csr_regenerated", ca.name, user=user)
@@ -158,6 +161,7 @@ async def import_ca(request: Request, name: str = Form(...), cert_pem: str = For
         ca = ca_ops.import_ca(db, name=name, cert_pem=cert_pem, key_pem=key_pem or None,
                               ca_type_override=override)
     except Exception as e:  # noqa: BLE001
+        db.rollback()
         cas = db.execute(select(CertAuthority).order_by(CertAuthority.id)).scalars().all()
         return render(request, "pki.html", error=f"Import failed: {e}", cas=cas, certs=[],
                       ca_types=list(CAType), hierarchy=ca_ops.build_hierarchy(db))
@@ -236,6 +240,7 @@ async def sign_csr(request: Request, issuing_ca_id: int = Form(...), csr_pem: st
                    valid_days: int = Form(825), san_dns: str = Form(""),
                    db: Session = Depends(get_db), user: User = Depends(current_user)):
     def _err(msg: str):
+        db.rollback()
         cas = db.execute(select(CertAuthority).order_by(CertAuthority.id)).scalars().all()
         return render(request, "pki.html", error=msg, cas=cas, certs=[],
                       ca_types=list(CAType), hierarchy=ca_ops.build_hierarchy(db))
