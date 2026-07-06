@@ -73,6 +73,25 @@
 </div>
 {% endif %}
 
+{% if interop_issues %}
+<div class="card">
+  <h3>{{ icon('warn') }} Interop check with the far end ({{ interop_issues|length }})</h3>
+  <p class="muted">The imported side takes precedence — remediation targets the far end.</p>
+  <table>
+    <tr><th></th><th>Setting</th><th>This end</th><th>Far end</th><th>Remediation</th></tr>
+    {% for m in interop_issues %}
+    <tr class="sev-{{ 'weak' if m.severity == 'mismatch' else 'unknown' }}">
+      <td>[{{ m.severity|upper }}]</td>
+      <td>{{ m.field }}</td>
+      <td class="muted">{{ m.near }}</td>
+      <td class="muted">{{ m.far }}</td>
+      <td>{{ m.remediation }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
 {% if bgp_suggest %}
 <div class="card">
   <h3>Suggested BGP peering</h3>

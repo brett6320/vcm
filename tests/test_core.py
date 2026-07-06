@@ -2153,3 +2153,31 @@ def test_imported_config_preserved_and_format_toggle():
             p2_enc="aes-256-cbc", p2_integ="sha256", p2_pfs="14", confirm="1"))
         with SessionLocal() as db:
             assert db.get(VpnConnection, cid).imported_config == before   # untouched
+
+
+def test_interop_mismatch_flags_and_remediates():
+    from app.srx.interop import mismatches
+    from app.srx.model import VpnProfile, Endpoint, Phase1, Phase2
+
+    def mk(enc1="aes-256-cbc", dh="14", ll=None, rr=None, lid="hq.v", rid="dc.v"):
+        return VpnProfile(name="t", vendor="juniper_srx",
+                          local=Endpoint("l", "1.1.1.1", lid, ll or ["10.1.0.0/24"]),
+                          remote=Endpoint("r", "2.2.2.2", rid, rr or ["10.2.0.0/24"]),
+                          phase1=Phase1(encryption=enc1, dh_group=dh), phase2=Phase2())
+
+    near = mk()
+    # A correctly-mirrored far end with matching crypto -> no issues.
+    far_ok = mk(ll=["10.2.0.0/24"], rr=["10.1.0.0/24"], lid="dc.v", rid="hq.v")
+    assert mismatches(near, far_ok) == []
+
+    # Different P1 encryption + DH + non-mirrored selectors -> flagged, remediation
+    # targets the far end (imported side authoritative).
+    far_bad = mk(enc1="aes-128-cbc", dh="2", ll=["10.9.0.0/24"], rr=["10.1.0.0/24"],
+                 lid="dc.v", rid="hq.v")
+    iss = mismatches(near, far_bad, near_is_import=True)
+    fields = {m["field"] for m in iss}
+    assert "Phase 1 encryption" in fields and "Phase 1 DH group" in fields
+    assert "Traffic selectors" in fields
+    enc = [m for m in iss if m["field"] == "Phase 1 encryption"][0]
+    assert enc["severity"] == "mismatch" and "far end" in enc["remediation"]
+    assert "aes-256-cbc" in enc["remediation"]  # keep the imported value
