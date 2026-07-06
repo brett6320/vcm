@@ -193,26 +193,33 @@ def test_srx_uses_hostname_identities():
 
 
 def test_srx_traffic_selectors_by_peer_platform():
-    ts_line = "vpn-siteA traffic-selector ts0 local-ip"
-    # Route-based peer (another SRX) → no traffic-selector config lines
+    # Route-based peer (another SRX) → no selectors
     p = _mk_profile()
     p.remote_vendor = "juniper_srx"
     out = generators.generate(p)
-    assert ts_line not in out and "route-based" in out
-    # pfSense peer REQUIRES matching traffic-selectors (policy-based)
+    assert "ike proxy-identity local" not in out and "traffic-selector ts" not in out
+    assert "route-based" in out
+    # pfSense peer, single subnet pair → proxy-identity (must match peer Phase 2)
     p.remote_vendor = "pfsense"
     out = generators.generate(p)
-    assert "traffic-selector ts0 local-ip 10.1.0.0/24" in out
+    assert "ike proxy-identity local 10.1.0.0/24" in out
+    assert "ike proxy-identity remote 10.2.0.0/24" in out
+    assert "proxy-identity service any" in out
     assert "REQUIRED" in out and "MUST match" in out
-    # AWS peer → traffic-selector config present
-    p.remote_vendor = "aws"
-    assert "traffic-selector ts0 local-ip 10.1.0.0/24" in generators.generate(p)
+    # Multiple subnet pairs → traffic-selectors
+    pm = _mk_profile()
+    pm.remote_vendor = "pfsense"
+    pm.local.protected_subnets = ["10.1.0.0/24", "10.3.0.0/24"]
+    pm.remote.protected_subnets = ["10.2.0.0/24", "10.4.0.0/24"]
+    om = generators.generate(pm)
+    assert "traffic-selector ts0 local-ip 10.1.0.0/24" in om
+    assert "traffic-selector ts1 local-ip 10.3.0.0/24" in om
     # Fortinet/Palo are route-based (VTI) → omit selectors
     p.remote_vendor = "fortinet"
-    assert ts_line not in generators.generate(p)
-    # Unspecified → safe default includes them
+    assert "ike proxy-identity local" not in generators.generate(p)
+    # Unspecified → safe default includes selectors
     p.remote_vendor = ""
-    assert ts_line in generators.generate(p)
+    assert "ike proxy-identity local" in generators.generate(p)
 
 
 def test_all_vendors_generate():

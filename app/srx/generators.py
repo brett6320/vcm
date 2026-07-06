@@ -128,30 +128,38 @@ def gen_juniper_srx(p: VpnProfile) -> str:
         lines.append(f"set interfaces {st0} family inet")
     for subnet in p.remote.protected_subnets:
         lines.append(f"set routing-options static route {subnet} next-hop {st0}")
-    # Traffic selectors (proxy-IDs) are required whenever the far end negotiates
-    # specific selectors (pfSense/strongSwan, AWS, Azure, Cisco, MikroTik, Digi,
-    # Cradlepoint). Only true route-based VTI peers (SRX/Forti/Palo) can omit them.
+    # Phase-2 selectors are required whenever the far end negotiates specific
+    # selectors (pfSense/strongSwan, AWS, Azure, Cisco, MikroTik, Digi, Cradlepoint).
+    # A single subnet pair -> proxy-identity (classic, matches one peer Phase 2);
+    # multiple pairs -> traffic-selectors. Only route-based VTI peers omit them.
     if is_policy_based(p.remote_vendor):
-        for i, (l, r) in enumerate(_pairs(p.local.protected_subnets,
-                                          p.remote.protected_subnets)):
-            lines.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} local-ip {l}")
-            lines.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} remote-ip {r}")
-        lines.append(f"# Traffic-selectors REQUIRED: far end ({p.remote_vendor}) negotiates "
-                     "specific selectors. local-ip/remote-ip here MUST match the peer's "
-                     "traffic selectors (e.g. pfSense Phase 2 Local/Remote Network), mirrored.")
+        lines += _srx_selectors(n, p, p.remote_vendor)
     elif p.remote_vendor:
-        lines.append(f"# Far end ({p.remote_vendor}) is route-based (VTI); traffic-selectors "
-                     "not required — st0 routing carries traffic. Add proxy-identity only "
-                     "if the peer is configured with specific selectors.")
+        lines.append(f"# Far end ({p.remote_vendor}) is route-based (VTI); proxy-identity/"
+                     "traffic-selectors not required — st0 routing carries traffic.")
     else:
-        # Unknown peer platform — include selectors as the safe default.
-        for i, (l, r) in enumerate(_pairs(p.local.protected_subnets,
-                                          p.remote.protected_subnets)):
-            lines.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} local-ip {l}")
-            lines.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} remote-ip {r}")
-        lines.append("# Far-end platform not specified; traffic-selectors included as a safe "
-                     "default (they must match the peer). Set the far-end platform to tailor this.")
+        lines += _srx_selectors(n, p, "the peer")
+        lines.append("# Far-end platform not specified; selectors included as a safe default.")
     return _annotate(p, "\n".join(lines))
+
+
+def _srx_selectors(n: str, p: VpnProfile, who: str) -> list[str]:
+    pairs = list(_pairs(p.local.protected_subnets, p.remote.protected_subnets))
+    out: list[str] = []
+    if len(pairs) == 1:
+        l, r = pairs[0]
+        out += [f"set security ipsec vpn vpn-{n} ike proxy-identity local {l}",
+                f"set security ipsec vpn vpn-{n} ike proxy-identity remote {r}",
+                f"set security ipsec vpn vpn-{n} ike proxy-identity service any",
+                f"# proxy-identity REQUIRED: it MUST match {who}'s Phase 2 "
+                "(pfSense: Local Network = remote here, Remote Network = local here)."]
+    else:
+        for i, (l, r) in enumerate(pairs):
+            out.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} local-ip {l}")
+            out.append(f"set security ipsec vpn vpn-{n} traffic-selector ts{i} remote-ip {r}")
+        out.append(f"# traffic-selectors REQUIRED: each MUST match a {who} Phase 2 entry "
+                   "(one selector per peer local/remote network pair).")
+    return out
 
 
 # --------------------------------------------------------------------------- #
