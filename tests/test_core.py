@@ -526,6 +526,47 @@ def test_edit_connection():
             assert conn.name == "EE-vpn"                          # name unchanged
 
 
+def test_infer_peers_suggest_only():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, VpnConnection
+    from app.security.passwords import hash_password
+    import pyotp, re
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="inf").first():
+                db.add(User(username="inf", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        c.post("/login", data={"username": "inf", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+        # Two independently-created connections that are actually each other's peer
+        rA = c.post("/sites/generate", data=dict(name="A", vendor="juniper_srx",
+                    local_ip="203.0.113.1", remote_ip="203.0.113.2",
+                    local_subnets="10.1.0.0/24", remote_subnets="10.2.0.0/24",
+                    auth_method="certificate"), follow_redirects=False)
+        aid = int(rA.headers["location"].split("/")[-1])
+        c.post("/sites/generate", data=dict(name="B", vendor="pfsense",
+               local_ip="203.0.113.2", remote_ip="203.0.113.1",
+               local_subnets="10.2.0.0/24", remote_subnets="10.1.0.0/24",
+               auth_method="certificate"), follow_redirects=False)
+        # A's page suggests B (not auto-linked)
+        page = c.get(f"/connections/{aid}").text
+        assert "Suggested peer" in page and "public IPs match both ways" in page
+        with SessionLocal() as db:
+            assert db.get(VpnConnection, aid).peer_connection_id is None   # NOT linked yet
+        # find B's id and confirm the pairing
+        import re as _re
+        bid = int(_re.search(r'name="peer_id" value="(\d+)"', page).group(1))
+        c.post(f"/connections/{aid}/pair-confirm", data={"peer_id": bid})
+        with SessionLocal() as db:
+            a = db.get(VpnConnection, aid)
+            assert a.peer_connection_id == bid                            # linked on confirm
+            assert db.get(VpnConnection, bid).peer_connection_id == aid
+
+
 def test_change_remote_device_on_connection():
     from fastapi.testclient import TestClient
     from app.main import app

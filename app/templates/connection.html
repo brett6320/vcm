@@ -48,6 +48,28 @@
   <pre>{{ conn.generated_config }}</pre>
 </div>
 
+{% if suggestions %}
+<div class="card">
+  <h3>{{ icon('warn') }} Suggested peer{{ 's' if suggestions|length > 1 else '' }}</h3>
+  <p class="muted">These connections look like the far-end of this one, based on their
+    configuration. Nothing is linked until you confirm.</p>
+  <table>
+    <tr><th>Connection</th><th>Site</th><th>Why</th><th></th></tr>
+    {% for s in suggestions %}
+    <tr>
+      <td><a href="/connections/{{ s.conn.id }}">{{ s.conn.name }}</a></td>
+      <td>{{ s.site.name }} ({{ s.site.vendor.label }})</td>
+      <td class="muted">{{ s.reasons | join('; ') }}</td>
+      <td><form method="post" action="/connections/{{ conn.id }}/pair-confirm"
+                onsubmit="return confirm('Pair {{ conn.name }} with {{ s.conn.name }}? Both configs will be regenerated.');">
+          <input type="hidden" name="peer_id" value="{{ s.conn.id }}">
+          <button class="btn small">Confirm pairing</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
 <div class="card">
   <h3>Far-end (peer) configuration</h3>
   {% if peer %}

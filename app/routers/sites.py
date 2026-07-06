@@ -320,7 +320,38 @@ def connection_detail(conn_id: int, request: Request, db: Session = Depends(get_
                   profile=profile.to_dict(), warnings=all_warnings(profile), peer=peer,
                   peer_site=peer.site if peer else None, candidates=candidates,
                   sites=db.execute(select(Site).order_by(Site.name)).scalars().all(),
-                  vendors=generatable_vendors(), peer_suggest=mirror.to_dict())
+                  vendors=generatable_vendors(), peer_suggest=mirror.to_dict(),
+                  suggestions=(_suggest_peers(db, conn, profile) if not peer else []))
+
+
+def _suggest_peers(db: Session, conn: VpnConnection, profile: VpnProfile) -> list[dict]:
+    """Infer likely peer connections for an unpaired connection by matching
+    endpoints/subnets. Returns candidates only — pairing needs user confirmation."""
+    if conn.peer_connection_id:
+        return []
+    out = []
+    others = db.execute(
+        select(VpnConnection).where(VpnConnection.id != conn.id,
+                                    VpnConnection.peer_connection_id.is_(None))
+    ).scalars().all()
+    for other in others:
+        op = _profile(other)
+        reasons, score = [], 0
+        # Each side's remote gateway is the other's local public IP (both ways).
+        if (profile.remote.public_ip and profile.remote.public_ip == op.local.public_ip
+                and profile.local.public_ip and profile.local.public_ip == op.remote.public_ip):
+            reasons.append("public IPs match both ways")
+            score += 2
+        # Protected subnets mirror (my local == its remote, and vice versa).
+        if (profile.local.protected_subnets
+                and sorted(profile.local.protected_subnets) == sorted(op.remote.protected_subnets)
+                and sorted(profile.remote.protected_subnets) == sorted(op.local.protected_subnets)):
+            reasons.append("protected subnets mirror")
+            score += 1
+        if reasons:
+            out.append({"conn": other, "site": other.site, "reasons": reasons, "score": score})
+    out.sort(key=lambda x: -x["score"])
+    return out
 
 
 @conn_router.get("/{conn_id}/edit")
@@ -537,6 +568,30 @@ def _unpair(db: Session, conn: VpnConnection) -> None:
     if peer and peer.peer_connection_id == conn.id:
         peer.peer_connection_id = None
     conn.peer_connection_id = None
+
+
+@conn_router.post("/{conn_id}/pair-confirm")
+def pair_confirm(conn_id: int, request: Request, peer_id: int = Form(...),
+                 db: Session = Depends(get_db), user: User = Depends(current_user)):
+    """Confirm an inferred pairing: link two existing, unpaired connections. Keeps
+    each side's own crypto; sets peer platform and regenerates both configs."""
+    conn = db.get(VpnConnection, conn_id)
+    peer = db.get(VpnConnection, peer_id)
+    if not conn or not peer:
+        raise HTTPException(404, "Not found")
+    if conn.peer_connection_id or peer.peer_connection_id:
+        return RedirectResponse(f"/connections/{conn.id}", status_code=303)  # already paired
+    conn.peer_connection_id = peer.id
+    peer.peer_connection_id = conn.id
+    cp = _profile(conn)
+    cp.remote_vendor = peer.site.vendor.value
+    _save_profile(conn, conn.site, cp)
+    pp = _profile(peer)
+    pp.remote_vendor = conn.site.vendor.value
+    _save_profile(peer, peer.site, pp)
+    db.flush()
+    audit(db, request, "conn.pair_confirm", f"{conn.name}<->{peer.name}", user=user)
+    return _both_ends(request, db, conn, peer)
 
 
 @conn_router.post("/{conn_id}/unpair")
