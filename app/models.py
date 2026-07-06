@@ -428,6 +428,9 @@ class VpnConnection(Base):
     # Full parameter set as JSON (endpoints, proposals, subnets, PKI refs, etc.)
     params_json: Mapped[str] = mapped_column(Text)
     generated_config: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The original device config as imported (set-syntax for Junos), preserved
+    # verbatim and NEVER regenerated/overwritten — so operations can't trample it.
+    imported_config: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(16), default="generated")  # generated|imported
     # Set when an import could not be fully parsed — the shown params are not trustworthy.
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False)

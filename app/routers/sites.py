@@ -268,11 +268,13 @@ def _apply_import_update(db: Session, site: Site, parsed: dict, config_text: str
     by_name = {c.name: c for c in site.connections}
     for item in parsed["connections"]:
         prof = item["profile"]
+        original = config_text                            # full original device config, verbatim
         after = _imported_config(prof, item.get("config") or config_text)
         ex = by_name.get(prof.name)
         if ex:
             ex.params_json = json.dumps(prof.to_dict())
             ex.generated_config = after
+            ex.imported_config = original                # preserve original; never regenerated
             ex.needs_review = bool(item.get("review"))
             ex.review_note = item.get("review")
             ex.source = "imported"
@@ -281,7 +283,7 @@ def _apply_import_update(db: Session, site: Site, parsed: dict, config_text: str
             prof.name = cname
             db.add(VpnConnection(site_id=site.id, name=cname, source="imported",
                                  params_json=json.dumps(prof.to_dict()),
-                                 generated_config=after,
+                                 generated_config=after, imported_config=original,
                                  needs_review=bool(item.get("review")),
                                  review_note=item.get("review")))
     db.flush()
@@ -330,10 +332,12 @@ async def do_import(request: Request, name: str = Form(""), config_text: str = F
         profile = item["profile"]
         cname = _unique_conn_name(db, site.id, profile.name)
         profile.name = cname
+        original = config_text                            # full original device config, verbatim
         conn = VpnConnection(site_id=site.id, name=cname, source="imported",
                              params_json=json.dumps(profile.to_dict()),
                              generated_config=_imported_config(profile,
                                                                item.get("config") or config_text),
+                             imported_config=original,
                              needs_review=bool(item.get("review")),
                              review_note=item.get("review"))
         db.add(conn)
@@ -487,9 +491,18 @@ def presumed_relationships(request: Request, db: Session = Depends(get_db),
     return render(request, "relationships.html", pairs=_all_presumed_pairs(db))
 
 
+def _fmt_config(vendor: str, text: str | None, fmt: str) -> str:
+    """Render config in the requested format. 'set' converts curly-brace Junos to
+    set-commands; 'orig' returns it as stored. Non-Junos is unaffected."""
+    t = text or ""
+    if fmt == "set" and vendor == "juniper_srx":
+        return importer.junos_curly_to_set(t)
+    return t
+
+
 @conn_router.get("/{conn_id}")
-def connection_detail(conn_id: int, request: Request, db: Session = Depends(get_db),
-                      user: User = Depends(current_user)):
+def connection_detail(conn_id: int, request: Request, fmt: str = "orig",
+                      db: Session = Depends(get_db), user: User = Depends(current_user)):
     conn = db.get(VpnConnection, conn_id)
     if not conn:
         raise HTTPException(404, "Not found")
@@ -509,13 +522,36 @@ def connection_detail(conn_id: int, request: Request, db: Session = Depends(get_
                          or profile.bgp.peer_ip != inferred.peer_ip
                          or profile.bgp.local_ip != inferred.local_ip):
             bgp_suggest = inferred.__dict__
+
+    # Side-by-side: this side vs the far end (paired peer, else the on-the-fly mirror).
+    fmt = "set" if fmt == "set" else "orig"
+    this_vendor = conn.site.vendor.value
+    if peer:
+        far_vendor = peer.site.vendor.value
+        far_label = f"{peer.site.name} / {peer.name} ({peer.site.vendor.label})"
+        far_raw = peer.generated_config
+    else:
+        far_vendor = (profile.remote_vendor or this_vendor)
+        far_label = "Far end (generated on the fly)"
+        m = profile.mirror(f"{profile.name}-peer")
+        m.vendor = far_vendor
+        suggest.fill_ike_ids(m)
+        far_raw = generators.generate(m)
+    sides = {
+        "this_label": f"{conn.site.name} / {conn.name} ({conn.site.vendor.label})",
+        "this_config": _fmt_config(this_vendor, conn.generated_config, fmt),
+        "far_label": far_label,
+        "far_config": _fmt_config(far_vendor, far_raw, fmt),
+        "imported": _fmt_config(this_vendor, conn.imported_config, fmt) if conn.imported_config else None,
+        "is_junos": this_vendor == "juniper_srx",
+    }
     return render(request, "connection.html", conn=conn, site=conn.site,
                   profile=profile.to_dict(), warnings=all_warnings(profile), peer=peer,
                   peer_site=peer.site if peer else None, candidates=candidates,
                   sites=db.execute(select(Site).order_by(Site.name)).scalars().all(),
                   vendors=generatable_vendors(), peer_suggest=mirror.to_dict(),
                   suggestions=(_suggest_peers(db, conn, profile) if not peer else []),
-                  bgp_suggest=bgp_suggest)
+                  bgp_suggest=bgp_suggest, sides=sides, fmt=fmt)
 
 
 def _same_tunnel_subnet(a: str, b: str) -> bool:
