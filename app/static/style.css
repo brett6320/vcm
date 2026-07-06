@@ -38,7 +38,7 @@ nav a, nav a:visited { margin-right: .8rem; text-decoration: none; color: var(--
 .brand:visited { color: var(--fg); }
 .right { margin-left: auto; display: flex; align-items: center; gap: .8rem; }
 .who { color: var(--muted); font-size: .85rem; }
-main { max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; }
+main { max-width: 1280px; margin: 1.5rem auto; padding: 0 1.5rem; }
 h1, h2, h3 { line-height: 1.2; }
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
   padding: 1rem 1.2rem; margin-bottom: 1.2rem; }
@@ -86,3 +86,9 @@ pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow: a
 .badge-issuing { background: var(--ok); color: #05210f; }
 .badge-root, .badge-intermediate, .badge-issuing {
   padding: .05rem .5rem; border-radius: 10px; font-size: .7rem; text-transform: uppercase; }
+
+/* Tablet portrait / narrow windows: collapse multi-column form rows so
+   fields stay usable. Desktop keeps the wider two/three-column layout. */
+@media (max-width: 820px) {
+  .row, .row3 { grid-template-columns: 1fr; }
+}
