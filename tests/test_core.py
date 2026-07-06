@@ -752,6 +752,53 @@ def test_multiple_passkeys_per_user():
         assert u.has_mfa
 
 
+def test_import_ca():
+    from app.db import SessionLocal, init_db
+    from app.pki import ca as ca_ops, csr as csr_ops
+    from app.models import CAType
+    from cryptography.hazmat.primitives import serialization
+    init_db()
+    with SessionLocal() as db:
+        # Build an external root + issuing pair outside VCM, export PEMs.
+        root = ca_ops.create_ca(db, name="ext-root-src", dn={"CN": "Ext Root"},
+                                ca_type=CAType.root, key_type="ec",
+                                key_params="secp384r1", valid_days=3650)
+        issuing = ca_ops.create_ca(db, name="ext-iss-src", dn={"CN": "Ext Issuing"},
+                                   ca_type=CAType.issuing, key_type="ec",
+                                   key_params="secp384r1", valid_days=1825, parent=root)
+        root_cert = root.cert_pem
+        iss_cert = issuing.cert_pem
+        iss_key = ca_ops.keys.unwrap_private_key(issuing.key_enc).private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption()).decode()
+        db.commit()
+
+    with SessionLocal() as db2:
+        from app.models import CertAuthority as _CA
+        db2.query(_CA).delete()   # clean slate (shared in-memory DB across tests)
+        db2.commit()
+        # Import the root cert-only (no key) -> can't sign
+        r = ca_ops.import_ca(db2, name="imported-root", cert_pem=root_cert)
+        assert r.ca_type == CAType.root and not r.has_private_key
+        # Import the issuing CA with its key -> links to imported root, can sign
+        iss = ca_ops.import_ca(db2, name="imported-iss", cert_pem=iss_cert, key_pem=iss_key)
+        assert iss.ca_type == CAType.issuing and iss.has_private_key
+        assert iss.parent_id == r.id                      # issuer matched -> linked
+        # Wrong key is rejected
+        import pytest
+        _, other_csr = csr_ops.generate_leaf_keypair_and_csr({"CN": "x"}, "ec", "secp256r1")
+        wrong_key = ca_ops.keys.generate_key("ec", "secp256r1").private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption()).decode()
+        with pytest.raises(ValueError):
+            ca_ops.import_ca(db2, name="bad", cert_pem=iss_cert, key_pem=wrong_key)
+        # The imported issuing CA can sign a CSR
+        kp, csr = csr_ops.generate_leaf_keypair_and_csr({"CN": "srx9"}, "ec", "secp256r1")
+        cert = ca_ops.sign_csr(db2, issuing_ca=iss, csr=csr, valid_days=365)
+        assert "BEGIN CERTIFICATE" in cert.cert_pem
+        db2.commit()
+
+
 def test_pki_hierarchy_and_csr_sign():
     from app.db import SessionLocal, init_db
     init_db()
