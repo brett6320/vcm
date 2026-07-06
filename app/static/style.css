@@ -115,3 +115,10 @@ tr.diff-insert td:last-child { background: color-mix(in srgb, var(--ok) 22%, tra
 tr.diff-delete td:first-child { background: color-mix(in srgb, var(--danger) 20%, transparent); }
 tr.diff-replace td:first-child { background: color-mix(in srgb, var(--danger) 16%, transparent); }
 tr.diff-replace td:last-child { background: color-mix(in srgb, var(--ok) 18%, transparent); }
+
+/* Collapsible panels (enhanced by collapsible.js on panel-heavy pages). */
+.card.collapsible > .card-head .collapse-toggle,
+.card.collapsible .collapse-toggle { cursor: pointer; user-select: none; }
+.collapse-arrow { color: var(--muted); font-size: .8em; }
+.card.collapsed > :not(.card-head) { display: none; }
+.card.collapsed { padding-bottom: .6rem; }
