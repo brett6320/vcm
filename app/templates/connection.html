@@ -31,6 +31,16 @@
 </div>
 
 <div class="card">
+  <h3>Rename connection</h3>
+  <form method="post" action="/connections/{{ conn.id }}/rename" style="display:flex;gap:.5rem;align-items:end">
+    <div style="flex:1"><label>New name</label><input name="new_name" value="{{ conn.name }}" required></div>
+    <button class="btn">Rename &amp; get device syntax</button>
+  </form>
+  <p class="muted">Regenerates this config under the new name and produces the in-place
+    rename commands for {{ site.vendor.label }}.</p>
+</div>
+
+<div class="card">
   <h3>Generated configuration</h3>
   <a class="btn small" href="/connections/{{ conn.id }}/config">Download</a>
   <a class="btn small" href="/connections/{{ conn.id }}/far-end">Far-end config (on the fly)</a>

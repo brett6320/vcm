@@ -11,7 +11,7 @@ from ..db import get_db
 from ..models import Site, User, Vendor, VpnConnection
 from ..security.deps import audit, current_user, require_admin
 from ..srx import defaults as defaults_svc
-from ..srx import generators, importer, proposals, suggest
+from ..srx import generators, importer, proposals, rename as rename_mod, suggest
 from ..srx.model import Endpoint, Phase1, Phase2, VpnProfile, all_warnings
 from ..templates_env import render
 
@@ -383,6 +383,37 @@ def build_far_end(conn_id: int, request: Request,
     audit(db, request, "conn.build_far_end",
           f"{conn.name}->{peer_site.name}/{cname}({peer_profile.vendor})", user=user)
     return _both_ends(request, db, conn, peer_conn)
+
+
+@conn_router.post("/{conn_id}/rename")
+def rename_connection(conn_id: int, request: Request, new_name: str = Form(...),
+                      db: Session = Depends(get_db), user: User = Depends(current_user)):
+    conn = db.get(VpnConnection, conn_id)
+    if not conn:
+        raise HTTPException(404, "Not found")
+    new_name = new_name.strip()
+    old = conn.name
+    if not new_name or new_name == old:
+        return RedirectResponse(f"/connections/{conn.id}", status_code=303)
+    # Enforce uniqueness within the site.
+    clash = db.execute(select(VpnConnection).where(
+        VpnConnection.site_id == conn.site_id, VpnConnection.name == new_name,
+        VpnConnection.id != conn.id)).scalar_one_or_none()
+    if clash:
+        return RedirectResponse(f"/connections/{conn.id}", status_code=303)
+
+    site = conn.site
+    profile = _profile(conn)
+    # In-place device rename syntax (uses the OLD profile object names).
+    rename_syntax = rename_mod.rename_config(site.vendor.value, profile, old, new_name)
+    # Apply the rename: update the profile + connection, regenerate config.
+    profile.name = new_name
+    conn.name = new_name
+    _save_profile(conn, site, profile)
+    db.flush()
+    audit(db, request, "conn.rename", f"{site.name}: {old} -> {new_name}", user=user)
+    return render(request, "rename.html", conn=conn, site=site, old=old, new=new_name,
+                  rename_syntax=rename_syntax)
 
 
 @conn_router.post("/{conn_id}/delete")

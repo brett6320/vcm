@@ -52,6 +52,29 @@ def test_srx_generation_and_roundtrip():
     assert back.phase1.encryption == "aes-256-cbc"
 
 
+def test_rename_syntax_per_vendor():
+    from app.srx import rename
+    p = _mk_profile()
+    # Juniper: atomic rename statements
+    j = rename.rename_config("juniper_srx", p, "old", "new")
+    assert "rename security ipsec vpn vpn-old to vpn-new" in j
+    # Fortinet
+    f = rename.rename_config("fortinet", p, "old", "new")
+    assert "rename old to new" in f
+    # MikroTik
+    m = rename.rename_config("mikrotik", p, "old", "new")
+    assert "/ip ipsec peer set [find name=old] name=new" in m
+    # Palo
+    pa = rename.rename_config("palo_alto", p, "old", "new")
+    assert "rename network tunnel ipsec old to new" in pa
+    # Cisco: delete/recreate guidance
+    c = rename.rename_config("cisco_firepower", p, "old", "new")
+    assert "no access-list old_acl" in c
+    # regenerating under a new name renames objects in the config too
+    p.name = "new"
+    assert "vpn-new" in generators.generate(p) and "vpn-old" not in generators.generate(p)
+
+
 def test_all_vendors_generate():
     for v in ("juniper_srx", "digi", "cradlepoint", "pfsense", "fortinet",
               "palo_alto", "cisco_firepower", "strongswan", "mikrotik"):
