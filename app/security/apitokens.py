@@ -26,9 +26,30 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..models import ApiToken, Role, TokenScope, User, ensure_aware, utcnow
+from . import ipfilter
 from .deps import enforce_ip
 
 TOKEN_PREFIX = "vcm_"
+
+
+def parse_allowed_ips(raw: str | None) -> list[str]:
+    """Split a token's allowed-IP field (comma/space/newline separated CIDRs)."""
+    import re
+    return [p for p in re.split(r"[,\s]+", (raw or "").strip()) if p]
+
+
+def validate_cidrs(raw: str | None) -> str:
+    """Normalise + validate CIDRs for storage; raises ValueError on a bad entry.
+    Returns the cleaned comma-separated string ('' when none)."""
+    import ipaddress
+    out = []
+    for c in parse_allowed_ips(raw):
+        try:
+            ipaddress.ip_network(c, strict=False)
+        except ValueError as e:
+            raise ValueError(f"Invalid IP/CIDR '{c}': {e}") from e
+        out.append(c)
+    return ", ".join(out)
 
 # Privilege ordering — a token satisfies a requirement if its rank is >= the need.
 _SCOPE_RANK = {TokenScope.read: 0, TokenScope.write: 1, TokenScope.admin: 2}
@@ -100,6 +121,12 @@ def api_principal(request: Request, db: Session = Depends(get_db),
     if user is None or user.disabled:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             detail="Token owner is inactive", headers=_UNAUTH_HEADERS)
+    # Optional per-token source-IP restriction (in addition to the global allowlist).
+    cidrs = parse_allowed_ips(row.allowed_ips)
+    if cidrs and not ipfilter._in_any(ipfilter.client_ip(request), cidrs):
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            detail="Source IP not allowed for this token",
+                            headers=_UNAUTH_HEADERS)
     row.last_used_at = utcnow()  # persisted by get_db's commit
     request.state.user = user
     request.state.api_token = row
