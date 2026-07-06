@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ diff_title }}</h1>
+<p class="muted">Review the effective before/after configuration below. Nothing is
+  changed until you approve.</p>
+
+{% if not any_changed %}
+<div class="alert notice">No effective change to the generated configuration.</div>
+{% endif %}
+
+{% for s in sections %}
+<div class="card">
+  <h3>{{ s.title }} {% if not s.changed %}<span class="muted">(no change)</span>{% endif %}</h3>
+  <div class="diff-wrap">
+    <table class="diff">
+      <thead><tr><th>Current</th><th>Proposed</th></tr></thead>
+      <tbody>
+        {% for r in s.rows %}
+        <tr class="diff-{{ r.kind }}">
+          <td>{{ r.left }}</td>
+          <td>{{ r.right }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+
+<div class="card">
+  <form method="post" action="{{ action }}" style="display:flex;gap:.6rem;align-items:center">
+    {% for k, v in fields.items() %}
+    <input type="hidden" name="{{ k }}" value="{{ v }}">
+    {% endfor %}
+    <button class="btn">Approve &amp; apply</button>
+    <a class="btn small" href="javascript:history.back()">Cancel</a>
+  </form>
+</div>
+{% endblock %}
