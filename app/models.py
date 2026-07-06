@@ -262,6 +262,9 @@ class ApiToken(Base):
     # Non-secret display identifier (scheme + a few leading chars of the secret).
     prefix: Mapped[str] = mapped_column(String(16))
     scope: Mapped[TokenScope] = mapped_column(_enum_col(TokenScope), default=TokenScope.read)
+    # Optional per-token source-IP restriction (comma/space-separated CIDRs).
+    # Empty/NULL = no per-token restriction (the global allowlist still applies).
+    allowed_ips: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

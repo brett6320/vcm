@@ -99,7 +99,7 @@ def revoke_others(request: Request, db: Session = Depends(get_db),
 
 @router.post("/tokens/create")
 def create_token(request: Request, name: str = Form(...), scope: str = Form("read"),
-                 expires_days: str = Form(""),
+                 expires_days: str = Form(""), allowed_ips: str = Form(""),
                  db: Session = Depends(get_db), user: User = Depends(current_user)):
     label = name.strip()[:64]
     if not label:
@@ -119,14 +119,21 @@ def create_token(request: Request, name: str = Form(...), scope: str = Form("rea
             return _err(request, db, user, "Expiry must be a number of days")
         if days > 0:
             expires_at = utcnow() + timedelta(days=days)
+    try:
+        ip_rule = apitokens.validate_cidrs(allowed_ips) or None
+    except ValueError as e:
+        return _err(request, db, user, str(e))
 
     plaintext = apitokens.generate_token()
     tok = ApiToken(user_id=user.id, name=label, scope=wanted,
                    token_hash=apitokens.hash_token(plaintext),
-                   prefix=apitokens.token_prefix(plaintext), expires_at=expires_at)
+                   prefix=apitokens.token_prefix(plaintext), expires_at=expires_at,
+                   allowed_ips=ip_rule)
     db.add(tok)
     # Never log the plaintext — only the non-secret prefix/label.
-    audit(db, request, "apitoken.create", f"{label} ({wanted.value}, {tok.prefix})", user=user)
+    audit(db, request, "apitoken.create",
+          f"{label} ({wanted.value}, {tok.prefix}"
+          + (f", ips={ip_rule}" if ip_rule else "") + ")", user=user)
     return _render(request, db, user, new_token=plaintext,
                    notice=f"Token '{label}' created — copy it now; it won't be shown again.")
 

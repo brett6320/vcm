@@ -87,13 +87,14 @@
   {% endif %}
 
   <table>
-    <tr><th>Name</th><th>Prefix</th><th>Scope</th><th>Created</th><th>Last used</th>
-        <th>Expires</th><th>Status</th><th></th></tr>
+    <tr><th>Name</th><th>Prefix</th><th>Scope</th><th>Allowed IPs</th><th>Created</th>
+        <th>Last used</th><th>Expires</th><th>Status</th><th></th></tr>
     {% for t in api_tokens %}
     <tr>
       <td>{{ t.name }}</td>
       <td class="muted"><code>{{ t.prefix }}…</code></td>
       <td>{{ t.scope.value }}</td>
+      <td class="muted">{{ t.allowed_ips or 'any' }}</td>
       <td class="muted">{{ t.created_at.strftime('%Y-%m-%d') }}</td>
       <td class="muted">{{ t.last_used_at.strftime('%Y-%m-%d %H:%M') if t.last_used_at else '—' }}</td>
       <td class="muted">{{ t.expires_at.strftime('%Y-%m-%d') if t.expires_at else 'never' }}</td>
@@ -107,7 +108,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="8" class="muted">No API tokens yet.</td></tr>
+    <tr><td colspan="9" class="muted">No API tokens yet.</td></tr>
     {% endfor %}
   </table>
 
@@ -121,6 +122,10 @@
       <div><label>Expires in days (optional)</label>
         <input name="expires_days" type="number" min="1" placeholder="never"></div>
     </div>
+    <label>Allowed source IPs / CIDRs (optional — blank = no per-token restriction)</label>
+    <input name="allowed_ips" placeholder="203.0.113.0/24, 198.51.100.10">
+    <p class="muted" style="font-size:.75rem">Restricts this token to these sources
+      (in addition to the global allowlist).</p>
     <button class="btn" style="margin-top:.6rem">Create API token</button>
   </form>
 </div>

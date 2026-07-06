@@ -1956,3 +1956,42 @@ def test_api_calls_are_audit_logged():
             assert len(rows) >= before + 2
             recent = [r for r in rows if r.detail and "/api/sites" in r.detail]
             assert recent and prefix in recent[-1].detail and recent[-1].username == "apiaud"
+
+
+def test_api_token_per_token_ip_restriction():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, ApiToken
+    from app.security.passwords import hash_password
+    from app.security.apitokens import hash_token, validate_cidrs, parse_allowed_ips
+
+    # Helper validation
+    assert validate_cidrs("203.0.113.0/24, 198.51.100.10") == "203.0.113.0/24, 198.51.100.10"
+    assert validate_cidrs("") == ""
+    import pytest
+    with pytest.raises(ValueError):
+        validate_cidrs("not-an-ip")
+    assert parse_allowed_ips("a, b\nc") == ["a", "b", "c"]
+
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="ipt").first():
+                db.add(User(username="ipt", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        _login_mfa(c, "ipt")
+        tok = _create_token_via_ui(c, "restricted", "read")
+        # Restrict it to a network that does NOT include the test client IP (127.0.0.1).
+        with SessionLocal() as db:
+            row = db.query(ApiToken).filter_by(token_hash=hash_token(tok)).one()
+            row.allowed_ips = "203.0.113.0/24"
+            db.commit()
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        r = c.get("/api/whoami", headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 403 and "not allowed for this token" in r.json()["detail"]
+        # Widen to include loopback -> allowed.
+        with SessionLocal() as db:
+            db.query(ApiToken).filter_by(token_hash=hash_token(tok)).one().allowed_ips = "127.0.0.0/8"
+            db.commit()
+        assert c.get("/api/whoami", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
