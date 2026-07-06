@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Re-import: {{ site.name }} <span class="muted">({{ site.vendor.label }})</span></h1>
+<p class="muted">This import matches an existing site. Review the per-connection
+  before/after below, then choose whether to <strong>update</strong> the existing
+  site or create a <strong>duplicate</strong>. Nothing is changed until you choose.</p>
+
+{% if not any_changed %}
+<div class="alert notice">The import matches the existing configuration — no effective changes.</div>
+{% endif %}
+
+{% for s in sections %}
+<div class="card">
+  <h3>{{ s.title }} {% if not s.changed %}<span class="muted">(no change)</span>{% endif %}</h3>
+  <div class="diff-wrap">
+    <table class="diff">
+      <thead><tr><th>Existing</th><th>Imported</th></tr></thead>
+      <tbody>
+        {% for r in s.rows %}
+        <tr class="diff-{{ r.kind }}"><td>{{ r.left }}</td><td>{{ r.right }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+
+<div class="card">
+  <form method="post" action="/sites/import" style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap">
+    <input type="hidden" name="name" value="{{ site_name }}">
+    <textarea name="config_text" hidden>{{ config_text }}</textarea>
+    <button class="btn" name="action" value="update">Update “{{ site.name }}”</button>
+    <button class="btn small" name="action" value="duplicate">Create a duplicate instead</button>
+    <a class="btn small" href="/sites/import">Cancel</a>
+  </form>
+  <p class="muted">Update matches connections by name: existing ones are overwritten,
+    new ones are added, and connections not present in the import are kept.</p>
+</div>
+{% endblock %}
