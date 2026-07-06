@@ -85,8 +85,17 @@ def _extract_brace_blocks(text: str, names: tuple[str, ...]) -> str:
     return "\n".join(out) + ("\n" if out else "")
 
 
+def is_pfsense_backup(text: str) -> bool:
+    """A pfSense config.xml backup (has <pfsense>…<ipsec> with phase1 entries)."""
+    head = text.lstrip()[:200].lower()
+    return ("<pfsense>" in text.lower() and "<ipsec>" in text.lower()
+            and ("<phase1>" in text.lower() or head.startswith("<?xml")))
+
+
 def detect_vendor(text: str) -> str:
     low = text.lower()
+    if is_pfsense_backup(text):
+        return "pfsense"
     if ("virtual private gateway" in low or "amazon web services" in low
             or "ipsec tunnel #" in low):
         return "aws"
@@ -200,6 +209,8 @@ def import_site(text: str, name: str | None = None) -> dict:
     vendor = detect_vendor(text)
     if vendor == "juniper_srx" and is_structured_junos(text):
         return _import_junos_structured(text, name)
+    if vendor == "pfsense" and is_pfsense_backup(text):
+        return _import_pfsense_backup(text, name)
 
     # Single-connection line/brace-style formats.
     if vendor == "digi":
@@ -721,6 +732,116 @@ def _import_azure(text: str, name: str | None) -> VpnProfile:
     if m := re.search(r"BGP ASN\s*:?\s*(\d+)", text, re.I):
         prof.bgp = Bgp(enabled=True, peer_as=m.group(1))
     return prof
+
+
+def _pf_enc_canon(name: str, keylen: str) -> str:
+    name = (name or "").lower()
+    if name == "aes":
+        return f"aes-{keylen}-cbc" if keylen else "aes-256-cbc"
+    if "gcm" in name:
+        for b in ("256", "192", "128"):
+            if b in name:
+                return f"aes-{b}-gcm"
+        return "aes-256-gcm"
+    return {"3des": "3des", "des": "des"}.get(name, name)
+
+
+def _pf_hash_canon(h: str) -> str:
+    h = (h or "").lower().replace("hmac_", "").replace("-", "")
+    for k in ("sha512", "sha384", "sha256", "sha1", "md5"):
+        if k in h:
+            return k
+    return h or "sha256"
+
+
+def _import_pfsense_backup(text: str, name: str | None) -> dict:
+    """Parse a pfSense config.xml backup, using only the <ipsec> section. Each
+    <phase1> becomes a connection; matching <phase2> entries (by ikeid) provide
+    the protected subnets. Other config sections are ignored."""
+    import xml.etree.ElementTree as ET
+
+    def t(el, path, default=""):
+        c = el.find(path) if el is not None else None
+        return c.text.strip() if c is not None and c.text else default
+
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:  # noqa: BLE001
+        return {"vendor": "pfsense", "model": "", "hostname": name or "pfsense",
+                "connections": [], "error": f"XML parse error: {e}"}
+
+    hostname = name or t(root, "./system/hostname") or "pfsense"
+    ipsec = root.find("./ipsec")
+    connections = []
+    if ipsec is None:
+        return {"vendor": "pfsense", "model": "", "hostname": hostname, "connections": []}
+
+    # group phase2 by ikeid
+    p2_by_ike: dict[str, list] = {}
+    for ph2 in ipsec.findall("./phase2"):
+        p2_by_ike.setdefault(t(ph2, "ikeid"), []).append(ph2)
+
+    for ph1 in ipsec.findall("./phase1"):
+        ikeid = t(ph1, "ikeid")
+        p1 = Phase1()
+        p1.ike_version = "ikev2" if t(ph1, "iketype") == "ikev2" else "ikev1"
+        p1.auth_method = ("certificate" if t(ph1, "authentication_method") == "cert"
+                          else "psk")
+        enc = ph1.find("./encryption/item/encryption-algorithm")
+        if enc is not None:
+            p1.encryption = _pf_enc_canon(t(enc, "name"), t(enc, "keylen"))
+        item = ph1.find("./encryption/item")
+        if item is not None:
+            if h := t(item, "hash-algorithm"):
+                p1.integrity = _pf_hash_canon(h)
+            if d := t(item, "dhgroup"):
+                p1.dh_group = d
+        if lt := t(ph1, "lifetime"):
+            p1.lifetime_seconds = int(lt) if lt.isdigit() else p1.lifetime_seconds
+
+        remote = Endpoint(name="remote", public_ip=t(ph1, "remote-gateway"))
+        local = Endpoint(name="local")
+
+        p2 = Phase2()
+        locals_, remotes_ = [], []
+        for ph2 in p2_by_ike.get(ikeid, []):
+            locals_.append(_pf_netid(ph2.find("./localid")))
+            remotes_.append(_pf_netid(ph2.find("./remoteid")))
+            eo = ph2.find("./encryption-algorithm-option")
+            if eo is not None:
+                p2.encryption = _pf_enc_canon(t(eo, "name"), t(eo, "keylen"))
+            if h := t(ph2, "hash-algorithm-option"):
+                p2.integrity = _pf_hash_canon(h)
+            if pf := t(ph2, "pfsgroup"):
+                p2.pfs_group = pf
+        local.protected_subnets = [s for s in locals_ if s]
+        remote.protected_subnets = [s for s in remotes_ if s]
+
+        cname = t(ph1, "descr") or f"tunnel-{ikeid or len(connections)+1}"
+        profile = VpnProfile(name=cname, vendor="pfsense", local=local, remote=remote,
+                             phase1=p1, phase2=p2, wan_interface=t(ph1, "interface"))
+        config = _redact_pf(ET.tostring(ph1, encoding="unicode"))
+        connections.append({"profile": profile, "config": config, "review": None})
+
+    return {"vendor": "pfsense", "model": "", "hostname": hostname,
+            "connections": connections}
+
+
+def _pf_netid(el) -> str:
+    """pfSense localid/remoteid -> CIDR (network type) or '' otherwise."""
+    if el is None:
+        return ""
+    typ = (el.findtext("type") or "").strip()
+    if typ == "network":
+        addr = (el.findtext("address") or "").strip()
+        bits = (el.findtext("netbits") or "").strip()
+        return f"{addr}/{bits}" if addr and bits else addr
+    return ""  # 'lan'/interface-type selectors need the device's subnet — skip
+
+
+def _redact_pf(xml: str) -> str:
+    return re.sub(r"<pre-shared-key>.*?</pre-shared-key>",
+                  "<pre-shared-key>&lt;redacted&gt;</pre-shared-key>", xml, flags=re.S)
 
 
 def _import_mikrotik(text: str, name: str | None) -> VpnProfile:

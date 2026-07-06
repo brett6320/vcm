@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -190,8 +190,17 @@ def import_form(request: Request, user: User = Depends(current_user)):
 
 
 @router.post("/import")
-def do_import(request: Request, name: str = Form(""), config_text: str = Form(...),
-              db: Session = Depends(get_db), user: User = Depends(current_user)):
+async def do_import(request: Request, name: str = Form(""), config_text: str = Form(""),
+                    file: UploadFile = File(None),
+                    db: Session = Depends(get_db), user: User = Depends(current_user)):
+    # A file upload (e.g. a pfSense config.xml backup) takes precedence over paste.
+    if file is not None and file.filename:
+        try:
+            config_text = (await file.read()).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            return render(request, "import.html", error="Could not read the uploaded file")
+    if not config_text.strip():
+        return render(request, "import.html", error="Paste a config or upload a file")
     parsed = importer.import_site(config_text, name or None)
     if not parsed["connections"]:
         return render(request, "import.html", error="No VPN connections found in that config")

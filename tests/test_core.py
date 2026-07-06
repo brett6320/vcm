@@ -222,6 +222,76 @@ def test_srx_traffic_selectors_by_peer_platform():
     assert "ike proxy-identity local" in generators.generate(p)
 
 
+PFSENSE_BACKUP = """<?xml version="1.0"?>
+<pfsense>
+  <system><hostname>KKDDS-PFS</hostname></system>
+  <aliases><alias><name>ignoreme</name></alias></aliases>
+  <ipsec>
+    <phase1>
+      <ikeid>1</ikeid>
+      <iketype>ikev2</iketype>
+      <interface>wan</interface>
+      <remote-gateway>47.207.52.21</remote-gateway>
+      <authentication_method>pre_shared_key</authentication_method>
+      <pre-shared-key>SUPERSECRETKEY</pre-shared-key>
+      <encryption><item>
+        <encryption-algorithm><name>aes</name><keylen>256</keylen></encryption-algorithm>
+        <hash-algorithm>sha256</hash-algorithm><dhgroup>14</dhgroup>
+      </item></encryption>
+      <lifetime>28800</lifetime>
+      <descr>HESTIA</descr>
+    </phase1>
+    <phase2>
+      <ikeid>1</ikeid><mode>tunnel</mode>
+      <localid><type>network</type><address>192.168.0.0</address><netbits>19</netbits></localid>
+      <remoteid><type>network</type><address>172.23.0.0</address><netbits>16</netbits></remoteid>
+      <encryption-algorithm-option><name>aes</name><keylen>256</keylen></encryption-algorithm-option>
+      <hash-algorithm-option>hmac_sha256</hash-algorithm-option><pfsgroup>14</pfsgroup>
+    </phase2>
+    <phase1>
+      <ikeid>2</ikeid><iketype>ikev1</iketype>
+      <remote-gateway>47.207.52.25</remote-gateway>
+      <encryption><item>
+        <encryption-algorithm><name>aes256gcm</name><keylen>256</keylen></encryption-algorithm>
+        <dhgroup>20</dhgroup>
+      </item></encryption>
+      <descr>LIBERTAS</descr>
+    </phase1>
+    <phase2>
+      <ikeid>2</ikeid>
+      <localid><type>network</type><address>10.1.0.0</address><netbits>24</netbits></localid>
+      <remoteid><type>network</type><address>10.2.0.0</address><netbits>24</netbits></remoteid>
+      <encryption-algorithm-option><name>aes256gcm</name><keylen>256</keylen></encryption-algorithm-option>
+      <pfsgroup>20</pfsgroup>
+    </phase2>
+  </ipsec>
+</pfsense>"""
+
+
+def test_pfsense_backup_import():
+    from app.srx import importer
+    assert importer.detect_vendor(PFSENSE_BACKUP) == "pfsense"
+    assert importer.is_pfsense_backup(PFSENSE_BACKUP)
+    site = importer.import_site(PFSENSE_BACKUP)
+    assert site["vendor"] == "pfsense" and site["hostname"] == "KKDDS-PFS"
+    names = {c["profile"].name for c in site["connections"]}
+    assert names == {"HESTIA", "LIBERTAS"}          # one connection per phase1
+    by = {c["profile"].name: c for c in site["connections"]}
+    h = by["HESTIA"]["profile"]
+    assert h.remote.public_ip == "47.207.52.21"
+    assert h.phase1.ike_version == "ikev2" and h.phase1.auth_method == "psk"
+    assert h.phase1.encryption == "aes-256-cbc" and h.phase1.integrity == "sha256"
+    assert h.phase1.dh_group == "14"
+    assert h.local.protected_subnets == ["192.168.0.0/19"]
+    assert h.remote.protected_subnets == ["172.23.0.0/16"]
+    assert h.phase2.pfs_group == "14"
+    l = by["LIBERTAS"]["profile"]
+    assert l.phase1.encryption == "aes-256-gcm" and l.phase1.dh_group == "20"
+    # only IPsec is used; unrelated sections and the PSK are not stored
+    blob = str([c["config"] for c in site["connections"]])
+    assert "SUPERSECRETKEY" not in blob and "ignoreme" not in blob
+
+
 def test_all_vendors_generate():
     for v in ("juniper_srx", "digi", "cradlepoint", "pfsense", "fortinet",
               "palo_alto", "cisco_firepower", "strongswan", "mikrotik"):
