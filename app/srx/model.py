@@ -99,6 +99,20 @@ class VpnProfile:
         return m
 
 
+def _addr_is_dynamic(value: str) -> bool:
+    """True if an endpoint address is a hostname/FQDN or blank (i.e. not a
+    static literal IP) — the 'dynamic endpoint' case some clouds reject."""
+    import ipaddress
+    v = (value or "").strip()
+    if not v:
+        return True
+    try:
+        ipaddress.ip_address(v)
+        return False
+    except ValueError:
+        return True
+
+
 def all_warnings(p: VpnProfile) -> list[dict]:
     from .proposals import rate_proposal
 
@@ -111,6 +125,17 @@ def all_warnings(p: VpnProfile) -> list[dict]:
     if p.phase1.auth_method == "psk":
         w.append({"kind": "auth", "value": "psk", "severity": "weak",
                   "message": "Pre-shared key auth — prefer certificate auth via PKI"})
+    # AWS and Azure VPN gateways require a STATIC public IP for the on-prem
+    # (customer gateway) endpoint — they don't support a dynamic/DDNS hostname.
+    _CLOUD = {"aws", "azure"}
+    cloud_side = (p.local if p.remote_vendor in _CLOUD
+                  else p.remote if p.vendor in _CLOUD else None)
+    if cloud_side is not None and _addr_is_dynamic(cloud_side.public_ip):
+        cloud = p.remote_vendor if p.remote_vendor in _CLOUD else p.vendor
+        w.append({"kind": "endpoint", "value": "dynamic", "severity": "broken",
+                  "message": f"{cloud.upper()} VPN requires a static public IP on the "
+                             "customer gateway — dynamic/DDNS (hostname) endpoints are "
+                             "not supported."})
     # Collapse identical warnings (e.g. the same weak algorithm in P1 and P2).
     seen, deduped = set(), []
     for item in w:

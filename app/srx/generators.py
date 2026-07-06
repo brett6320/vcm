@@ -22,6 +22,21 @@ def is_policy_based(vendor: str) -> bool:
     return bool(vendor) and vendor not in ROUTE_BASED_PEERS
 
 
+def addr_kind(value: str) -> str:
+    """Classify an endpoint address for gateway config:
+    'ip' (literal IPv4/6), 'fqdn' (a DNS/DDNS hostname), or 'dynamic' (blank —
+    the peer has no fixed address, so we must be the responder / accept %any)."""
+    import ipaddress
+    v = (value or "").strip()
+    if not v:
+        return "dynamic"
+    try:
+        ipaddress.ip_address(v)
+        return "ip"
+    except ValueError:
+        return "fqdn"
+
+
 def _srx_ident(ident: str) -> str:
     """Junos IKE identity type by the ID's shape: DN -> distinguished-name,
     IP -> inet, otherwise a hostname/FQDN (the default for our IKE IDs)."""
@@ -84,11 +99,26 @@ def gen_juniper_srx(p: VpnProfile) -> str:
     else:
         lines.append(f"set security ike policy ike-pol-{n} pre-shared-key ascii-text "
                      f"\"{p.psk or 'CHANGE-ME'}\"")
-    # IKE gateway
+    # IKE gateway. A dynamic-address peer (blank IP) is identified by its IKE ID
+    # (hostname), with the SRX acting as responder; otherwise use the address
+    # (SRX resolves a DNS/DDNS hostname just like a literal IP).
+    kind = addr_kind(p.remote.public_ip)
+    if kind == "dynamic":
+        gw_addr = (f"set security ike gateway gw-{n} dynamic hostname {p.remote.id}"
+                   if p.remote.id
+                   else f"# gw-{n}: dynamic peer needs a remote IKE ID (hostname) to match")
+    else:
+        gw_addr = f"set security ike gateway gw-{n} address {p.remote.public_ip}"
     lines += [
         f"set security ike gateway gw-{n} ike-policy ike-pol-{n}",
-        f"set security ike gateway gw-{n} address {p.remote.public_ip}",
+        gw_addr,
         f"set security ike gateway gw-{n} external-interface {wan}",
+    ]
+    # IKEv1 dynamic/FQDN peer ID requires aggressive mode on Junos.
+    if kind in ("dynamic", "fqdn") and p.phase1.ike_version != "ikev2":
+        lines.append(f"set security ike policy ike-pol-{n} mode aggressive"
+                     "   # required: IKEv1 + dynamic/FQDN peer")
+    lines += [
         f"set security ike gateway gw-{n} version "
         + ("v2-only" if p.phase1.ike_version == "ikev2" else "v1-only"),
         f"set security ike gateway gw-{n} dead-peer-detection interval {p.phase1.dpd_seconds}",
@@ -246,6 +276,9 @@ def _swanctl_conf(p: VpnProfile, v: str, banner: str) -> str:
     local_ts = ",".join(p.local.protected_subnets or ["0.0.0.0/0"])
     remote_ts = ",".join(p.remote.protected_subnets or ["0.0.0.0/0"])
     auth = "pubkey" if p.phase1.auth_method == "certificate" else "psk"
+    # A dynamic peer (no fixed address) -> %any; we can't initiate to it, so trap.
+    remote_dynamic = addr_kind(p.remote.public_ip) == "dynamic"
+    remote_addr = "%any" if remote_dynamic else p.remote.public_ip
 
     lines = [
         f"# ---- {banner}: {n} ----",
@@ -253,7 +286,7 @@ def _swanctl_conf(p: VpnProfile, v: str, banner: str) -> str:
         f"  {n} {{",
         f"    version = {2 if p.phase1.ike_version == 'ikev2' else 1}",
         f"    local_addrs  = {p.local.public_ip or '%any'}",
-        f"    remote_addrs = {p.remote.public_ip}",
+        f"    remote_addrs = {remote_addr}",
         f"    proposals = {ike}",
         f"    dpd_delay = {p.phase1.dpd_seconds}s",
         "    local {",
@@ -273,11 +306,12 @@ def _swanctl_conf(p: VpnProfile, v: str, banner: str) -> str:
               f"        remote_ts = {remote_ts}",
               f"        esp_proposals = {esp}",
               f"        life_time = {p.phase2.lifetime_seconds}s",
-              "        start_action = start", "      }", "    }",
+              f"        start_action = {'trap' if remote_dynamic else 'start'}",
+              "      }", "    }",
               f"    reauth_time = {p.phase1.lifetime_seconds}s", "  }", "}"]
     if auth == "psk":
         lines += ["secrets {", f"  ike-{n} {{",
-                  f"    id = {p.remote.public_ip}",
+                  f"    id = {p.remote.id or ('%any' if remote_dynamic else p.remote.public_ip)}",
                   f"    secret = \"{p.psk or 'CHANGE-ME'}\"", "  }", "}"]
     return _annotate(p, "\n".join(lines))
 
@@ -319,16 +353,27 @@ def gen_pfsense(p: VpnProfile) -> str:
     iface = p.wan_interface or "WAN"
     myid = f"Fully qualified domain name ({p.local.id})" if p.local.id else "My IP address"
     peerid = f"Fully qualified domain name ({p.remote.id})" if p.remote.id else "Peer IP address"
+    # A DNS/DDNS hostname goes straight in Remote Gateway (pfSense re-resolves it,
+    # policy-based only). A dynamic peer uses 0.0.0.0 (one such tunnel per interface)
+    # and MUST identify by FQDN/email, with Child SA Start Action = None.
+    rkind = addr_kind(p.remote.public_ip)
+    rgw = "0.0.0.0" if rkind == "dynamic" else p.remote.public_ip
 
     out = [f"# ---- pfSense GUI settings — VPN > IPsec > Tunnels ({n}) ----",
            "[Phase 1 — Edit Phase 1]",
            f"  Key Exchange version : {'IKEv2' if p.phase1.ike_version == 'ikev2' else 'IKEv1'}",
            "  Internet Protocol    : IPv4",
            f"  Interface            : {iface}",
-           f"  Remote Gateway       : {p.remote.public_ip}",
+           f"  Remote Gateway       : {rgw}",
            f"  Authentication Method: {'Mutual Certificate' if cert else 'Mutual PSK'}",
            f"  My identifier        : {myid}",
            f"  Peer identifier      : {peerid}"]
+    if rkind == "dynamic":
+        out.append("  # Dynamic peer: Peer identifier must be FQDN/email (not Peer IP),"
+                   " set Child SA Start Action = None, policy-based only (one per interface).")
+    elif rkind == "fqdn":
+        out.append("  # DDNS hostname: policy-based tunnels only (not VTI); pfSense"
+                   " re-resolves periodically.")
     if cert:
         out.append(f"  My Certificate       : {n}-local")
     else:
@@ -376,12 +421,23 @@ def gen_mikrotik(p: VpnProfile) -> str:
     l = (p.local.protected_subnets or ["0.0.0.0/0"])[0]
     r = (p.remote.protected_subnets or ["0.0.0.0/0"])[0]
 
+    # Peer address: literal IP keeps /32; a DNS/DDNS hostname is used bare (RouterOS
+    # resolves it); a dynamic peer has no address -> passive (responder) matching by ID.
+    kind = addr_kind(p.remote.public_ip)
+    if kind == "ip":
+        peer_addr = f"address={p.remote.public_ip}/32 "
+    elif kind == "fqdn":
+        # RouterOS resolves (and re-resolves) the FQDN; keep /32 for compatibility.
+        peer_addr = f"address={p.remote.public_ip}/32 "
+    else:
+        # Dynamic peer: responder, wildcard address match.
+        peer_addr = "address=0.0.0.0/0 passive=yes "
     lines = [f"# ---- MikroTik RouterOS IPsec VPN: {n} ----",
              f"/ip ipsec profile add name={n} hash-algorithm={h1} enc-algorithm={p1_enc} "
              f"dh-group={dh1} lifetime={_secs(p.phase1.lifetime_seconds)}",
              f"/ip ipsec proposal add name={n} auth-algorithms={h2} enc-algorithms={enc2} "
              f"pfs-group={pfs} lifetime={_secs(p.phase2.lifetime_seconds)}",
-             f"/ip ipsec peer add name={n} address={p.remote.public_ip}/32 profile={n} "
+             f"/ip ipsec peer add name={n} {peer_addr}profile={n} "
              f"exchange-mode={exch}"]
     if p.phase1.auth_method == "certificate":
         lines.append(f"/ip ipsec identity add peer={n} auth-method=digital-signature "
@@ -426,13 +482,24 @@ def gen_fortinet(p: VpnProfile) -> str:
     cert = p.phase1.auth_method == "certificate"
 
     wan = p.wan_interface or "wan1"
+    # Remote gateway: static IP, DDNS hostname (set type ddns + remotegw-ddns),
+    # or a dial-up dynamic peer (set type dynamic, no remote-gw).
+    kind = addr_kind(p.remote.public_ip)
+    if kind == "ip":
+        gw_lines = ["        set type static", f"        set remote-gw {p.remote.public_ip}"]
+    elif kind == "fqdn":
+        gw_lines = ["        set type ddns", f'        set remotegw-ddns "{p.remote.public_ip}"']
+    else:
+        # dial-up responder: accept any peer address, allow tunnel-interface creation
+        gw_lines = ["        set type dynamic",
+                    "        set peertype any", "        set net-device enable"]
     lines = [f"# ---- FortiGate IPsec VPN: {n} ----",
              "config vpn ipsec phase1-interface",
              f'    edit "{n}"',
-             '        set type static',
+             gw_lines[0],
              f'        set interface "{wan}"',
              f"        set ike-version {'2' if p.phase1.ike_version == 'ikev2' else '1'}",
-             f"        set remote-gw {p.remote.public_ip}",
+             *gw_lines[1:],
              f"        set proposal {prop1}",
              f"        set dhgrp {dh1}",
              f"        set keylife {p.phase1.lifetime_seconds}"]
@@ -464,6 +531,16 @@ def gen_fortinet(p: VpnProfile) -> str:
 # --------------------------------------------------------------------------- #
 # Palo Alto (PAN-OS set CLI)
 # --------------------------------------------------------------------------- #
+def _palo_peer_addr(gw: str, addr: str) -> str:
+    """PAN-OS peer-address keyword by address kind: ip / fqdn / dynamic."""
+    kind = addr_kind(addr)
+    if kind == "ip":
+        return f"set network ike gateway {gw} peer-address ip {addr}"
+    if kind == "fqdn":
+        return f"set network ike gateway {gw} peer-address fqdn {addr}"
+    return f"set network ike gateway {gw} peer-address dynamic"
+
+
 def gen_palo_alto(p: VpnProfile) -> str:
     v = "palo_alto"
     n = p.name
@@ -485,8 +562,15 @@ def gen_palo_alto(p: VpnProfile) -> str:
              f"{b} ipsec-crypto-profiles {ipsecp} lifetime seconds {p.phase2.lifetime_seconds}",
              f"set network ike gateway {gw} protocol version {ver}",
              f"set network ike gateway {gw} protocol {ver} ike-crypto-profile {ikep}",
-             f"set network ike gateway {gw} peer-address ip {p.remote.public_ip}",
+             _palo_peer_addr(gw, p.remote.public_ip),
              f"set network ike gateway {gw} local-address interface {wan}"]
+    # A dynamic/FQDN peer means we respond only (passive); IKEv1 also needs aggressive mode.
+    if addr_kind(p.remote.public_ip) in ("dynamic", "fqdn"):
+        lines.append(f"set network ike gateway {gw} protocol {ver} exchange-mode aggressive"
+                     if ver == "ikev1" else
+                     f"# {gw}: dynamic/FQDN peer — enable Passive Mode (respond only)")
+        if ver == "ikev1":
+            lines.append(f"# {gw}: dynamic/FQDN peer also requires Passive Mode enabled")
     if p.phase1.auth_method == "certificate":
         lines.append(f"set network ike gateway {gw} local-id type fqdn id {p.local.id or n}")
         lines.append(f"set network ike gateway {gw} authentication certificate local-certificate {n}-local")
@@ -506,7 +590,11 @@ def gen_palo_alto(p: VpnProfile) -> str:
 def gen_cisco_firepower(p: VpnProfile) -> str:
     v = "cisco_firepower"
     n = p.name
-    peer = p.remote.public_ip
+    # ASA/FTD do NOT accept a hostname in `set peer` (no DNS/`dynamic` keyword like
+    # IOS). So BOTH a DDNS hostname and a truly dynamic IP must use a dynamic crypto
+    # map + tunnel-group DefaultL2LGroup (responder) — flag rather than emit a bad peer.
+    peer_dynamic = addr_kind(p.remote.public_ip) in ("dynamic", "fqdn")
+    peer = "<dynamic-peer>" if peer_dynamic else p.remote.public_ip
     enc1 = vendor_kw(ENCRYPTION, p.phase1.encryption, v)
     h1 = vendor_kw(INTEGRITY, p.phase1.integrity, v)
     enc2 = vendor_kw(ENCRYPTION, p.phase2.encryption, v)
@@ -518,6 +606,9 @@ def gen_cisco_firepower(p: VpnProfile) -> str:
     r = (p.remote.protected_subnets or ["0.0.0.0/0"])[0]
 
     lines = [f"! ---- Cisco Firepower/FTD (FlexConfig) IPsec VPN: {n} ----"]
+    if peer_dynamic:
+        lines.append("! Dynamic-IP peer: replace the static crypto map with a "
+                     "'crypto dynamic-map' and use tunnel-group DefaultL2LGroup (responder).")
     if ikev2:
         lines += ["crypto ikev2 policy 10",
                   f" encryption {enc1}", f" integrity {h1}", f" group {dh1}",
