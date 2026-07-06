@@ -240,7 +240,9 @@ class CertAuthority(Base):
     __tablename__ = "cert_authorities"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(128), unique=True)
+    # Name is a human label only — NOT an identity key. Uniqueness is by the
+    # certificate fingerprint below; names are auto-deduplicated on create/import.
+    name: Mapped[str] = mapped_column(String(128), index=True)
     ca_type: Mapped[CAType] = mapped_column(_enum_col(CAType))
     parent_id: Mapped[int | None] = mapped_column(
         ForeignKey("cert_authorities.id"), nullable=True
@@ -248,6 +250,8 @@ class CertAuthority(Base):
     subject_dn: Mapped[str] = mapped_column(String(512))
     # Empty while a CA is pending: we hold the key + CSR but no signed cert yet.
     cert_pem: Mapped[str] = mapped_column(Text)
+    # SHA-256 fingerprint of the certificate (DER) — the real identity/dedup key.
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     # Private key wrapped with KEK (AES-256-GCM: nonce||ciphertext). Never exported.
     key_enc: Mapped[bytes] = mapped_column(LargeBinary)
     key_type: Mapped[str] = mapped_column(String(16))  # ec|rsa
@@ -288,6 +292,8 @@ class Certificate(Base):
     subject_dn: Mapped[str] = mapped_column(String(512))
     san: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     cert_pem: Mapped[str] = mapped_column(Text)
+    # SHA-256 fingerprint of the certificate (DER) — identity/dedup key.
+    fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     csr_pem: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[CertStatus] = mapped_column(_enum_col(CertStatus), default=CertStatus.active)
     # Managed = issued/controlled by this VCM instance (can renew/revoke). Imported

@@ -1528,7 +1528,7 @@ def test_relationships_page_and_tunnel_correlation():
         assert "Review" in r.text
 
 
-def test_import_ca_duplicate_name_is_clean_error():
+def test_ca_identity_is_fingerprint_not_name():
     import pytest
     from app.db import SessionLocal, init_db
     from app.pki import ca as ca_ops
@@ -1536,13 +1536,24 @@ def test_import_ca_duplicate_name_is_clean_error():
     init_db()
     with SessionLocal() as db:
         db.query(CertAuthority).delete(); db.commit()
-        ca_ops.create_ca(db, name="Uniq", dn={"CN": "Uniq"}, ca_type=CAType.root,
-                         key_type="ec", key_params="secp256r1", valid_days=3650)
-        db.commit()
-        with pytest.raises(ValueError, match="already exists"):
-            ca_ops.create_ca(db, name="Uniq", dn={"CN": "Uniq2"}, ca_type=CAType.root,
+        # Same NAME, different certs → allowed; the second name is auto-deduplicated.
+        a = ca_ops.create_ca(db, name="Root", dn={"CN": "Root A"}, ca_type=CAType.root,
                              key_type="ec", key_params="secp256r1", valid_days=3650)
-        # session is still usable (no aborted transaction)
+        b = ca_ops.create_ca(db, name="Root", dn={"CN": "Root B"}, ca_type=CAType.root,
+                             key_type="ec", key_params="secp256r1", valid_days=3650)
+        db.commit()
+        assert a.name == "Root" and b.name == "Root-2"
+        assert a.fingerprint and b.fingerprint and a.fingerprint != b.fingerprint
+
+        # Importing the SAME cert twice → rejected by fingerprint, whatever the name.
+        pem = a.cert_pem
+        db.query(CertAuthority).filter(CertAuthority.id.in_([a.id, b.id])).delete(
+            synchronize_session=False)
+        db.commit()
+        imported = ca_ops.import_ca(db, name="Whatever", cert_pem=pem, key_pem=None)
+        assert imported.fingerprint == ca_ops.cert_fingerprint(pem)
+        with pytest.raises(ValueError, match="already present"):
+            ca_ops.import_ca(db, name="A Different Name", cert_pem=pem, key_pem=None)
         assert db.query(CertAuthority).count() == 1
 
 
