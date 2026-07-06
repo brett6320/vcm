@@ -12,6 +12,84 @@ from .model import Bgp, Endpoint, Phase1, Phase2, VpnProfile
 from .proposals import DH_GROUPS, ENCRYPTION, INTEGRITY
 
 
+def _mask_to_cidr(ip: str, mask: str | None) -> str:
+    """'10.0.0.0','255.255.255.0' -> '10.0.0.0/24'; passes CIDR/host through."""
+    import ipaddress
+    if not mask:
+        return ip
+    try:
+        return str(ipaddress.ip_network(f"{ip}/{mask}", strict=False))
+    except ValueError:
+        return ip
+
+
+def parse_bgp(text: str, vendor: str) -> Bgp:
+    """Best-effort extraction of BGP-over-tunnel config from an imported device
+    config, mirroring what our generators emit. Returns a disabled Bgp if none."""
+    b = Bgp()
+    t = text or ""
+    if vendor == "juniper_srx":
+        las = re.search(r"autonomous-system\s+(\d+)", t)
+        pas = re.search(r"peer-as\s+(\d+)", t)
+        nb = re.search(r"neighbor\s+([\d.]+)", t)
+        la = re.search(r"local-address\s+([\d.]+)", t)
+        nets = re.findall(r"route-filter\s+(\S+?)\s+exact", t)
+        if las or pas or nb:
+            b.enabled = True
+            b.local_as = las.group(1) if las else ""
+            b.peer_as = pas.group(1) if pas else ""
+            b.peer_ip = nb.group(1) if nb else ""
+            b.local_ip = la.group(1) if la else ""
+            b.networks = nets
+    elif vendor in ("cisco_firepower", "pfsense", "strongswan"):
+        rb = re.search(r"router bgp\s+(\d+)", t)
+        nb = re.search(r"neighbor\s+([\d.]+)\s+remote-as\s+(\d+)", t)
+        if rb or nb:
+            b.enabled = True
+            b.local_as = rb.group(1) if rb else ""
+            if nb:
+                b.peer_ip, b.peer_as = nb.group(1), nb.group(2)
+            for m in re.finditer(
+                    r"network\s+(\d+\.\d+\.\d+\.\d+)(?:/(\d+)|\s+(?:mask\s+)?(\d+\.\d+\.\d+\.\d+))?",
+                    t):
+                ip, pfx, mask = m.group(1), m.group(2), m.group(3)
+                b.networks.append(f"{ip}/{pfx}" if pfx else _mask_to_cidr(ip, mask))
+    elif vendor == "fortinet":
+        fas = re.search(r"router bgp\b.*?set as\s+(\d+)", t, re.S)
+        nb = re.search(r'edit\s+"?([\d.]+)"?\s+set remote-as\s+(\d+)', t, re.S)
+        if fas or nb:
+            b.enabled = True
+            b.local_as = fas.group(1) if fas else ""
+            if nb:
+                b.peer_ip, b.peer_as = nb.group(1), nb.group(2)
+            for ip, mask in re.findall(r"set prefix\s+([\d.]+)\s+([\d.]+)", t):
+                b.networks.append(_mask_to_cidr(ip, mask))
+    elif vendor == "palo_alto":
+        las = re.search(r"local-as\s+(\d+)", t)
+        pas = re.search(r"peer-as\s+(\d+)", t)
+        pip = re.search(r"peer-address ip\s+([\d.]+)", t)
+        lip = re.search(r"router-id\s+([\d.]+)", t)
+        if las or pas or pip:
+            b.enabled = True
+            b.local_as = las.group(1) if las else ""
+            b.peer_as = pas.group(1) if pas else ""
+            b.peer_ip = pip.group(1) if pip else ""
+            b.local_ip = lip.group(1) if lip else ""
+    elif vendor == "mikrotik":
+        if re.search(r"/routing bgp connection", t):
+            b.enabled = True
+            if m := re.search(r"remote\.address=([\d.]+)", t):
+                b.peer_ip = m.group(1)
+            if m := re.search(r"remote\.as=(\d+)", t):
+                b.peer_as = m.group(1)
+            if m := re.search(r"\bas=(\d+)", t):
+                b.local_as = m.group(1)
+            if m := re.search(r"local\.address=([\d.]+)", t):
+                b.local_ip = m.group(1)
+            b.networks = re.findall(r"network=([\d./]+)", t)
+    return b
+
+
 def _reverse(table: dict, vendor: str, kw: str) -> str:
     kw = (kw or "").lower()
     for canon, algo in table.items():
@@ -236,6 +314,9 @@ def import_site(text: str, name: str | None = None) -> dict:
         profile = _import_azure(text, name)
     else:
         profile = _import_srx(text, name)
+    # Capture BGP-over-tunnel if present (AWS/Azure importers already set it).
+    if not profile.bgp.enabled:
+        profile.bgp = parse_bgp(text, vendor)
     vpn_only = extract_vpn_sections(text, vendor)
     review = None
     if vendor == "aws":
@@ -280,9 +361,36 @@ def _import_junos_structured(text: str, name: str | None) -> dict:
     for vname, vbody in vpns.items():
         conn = _junos_connection(v, vname, vbody, gateways, ike_pols, ike_props,
                                  ipsec_pols, ipsec_props)
+        prof = conn["profile"]
+        # Tunnel IP is defined at [interfaces], outside the vpn stanza.
+        prof.tunnel_ip = _junos_tunnel_ip(text, prof.tunnel_interface)
         connections.append(conn)
 
+    # BGP is router-global; attach it to the connection whose tunnel IP shares the
+    # BGP neighbor's subnet (else the sole/first connection).
+    bgp = parse_bgp(text, v)
+    if bgp.enabled and connections:
+        _attach_bgp(connections, bgp)
+
     return {"vendor": v, "model": model, "hostname": hostname, "connections": connections}
+
+
+def _attach_bgp(connections: list[dict], bgp: Bgp) -> None:
+    """Assign a parsed Bgp to the best-matching connection by tunnel-IP subnet."""
+    import ipaddress
+
+    def _same_subnet(cidr: str, ip: str) -> bool:
+        try:
+            return ipaddress.ip_address(ip) in ipaddress.ip_interface(cidr).network
+        except ValueError:
+            return False
+
+    target = None
+    if bgp.peer_ip:
+        target = next((c for c in connections
+                       if c["profile"].tunnel_ip and _same_subnet(c["profile"].tunnel_ip,
+                                                                  bgp.peer_ip)), None)
+    (target or connections[0])["profile"].bgp = bgp
 
 
 def _junos_connection(v, vname, vbody, gateways, ike_pols, ike_props, ipsec_pols, ipsec_props):
@@ -376,11 +484,33 @@ def _junos_connection(v, vname, vbody, gateways, ike_pols, ike_props, ipsec_pols
         review.append("ipsec policy not found")
 
     profile = VpnProfile(name=vname, vendor=v, local=local, remote=remote, phase1=p1, phase2=p2)
+    # Tunnel/WAN interfaces (used later for far-end generation and correlation).
+    profile.tunnel_interface = bind or ""
+    profile.wan_interface = _scalar(gw, "external-interface") or "" if gw else ""
     # Reconstruct a focused config excerpt for this connection.
     config = _junos_excerpt(vname, vbody, gwname, gw, ikepolname, ikepol, ipsecpolname,
                             ipsecpol, ike_props, ipsec_props, bind)
     return {"profile": profile, "config": config,
             "review": "; ".join(review) if review else None}
+
+
+def _junos_tunnel_ip(text: str, iface: str) -> str:
+    """Find the address on a Junos tunnel unit (e.g. 'st0.5') in set- or
+    brace-style config. Returns '' if not present."""
+    if not iface:
+        return ""
+    # set-style: set interfaces st0.5 family inet address 169.254.0.1/30
+    m = re.search(rf"interfaces\s+{re.escape(iface)}\s+family\s+inet\s+address\s+([\d./]+)", text)
+    if m:
+        return m.group(1)
+    # brace-style: st0 { unit 5 { family inet { address 169.254.0.1/30; }}}
+    base, _, unit = iface.partition(".")
+    if unit:
+        m = re.search(rf"{re.escape(base)}\s*{{.*?unit\s+{unit}\b.*?address\s+([\d./]+)",
+                      text, re.S)
+        if m:
+            return m.group(1)
+    return ""
 
 
 def _dynamic_hostname(gw: str) -> str | None:
@@ -459,8 +589,15 @@ def _import_srx(text: str, name: str | None) -> VpnProfile:
         if m := re.search(r"traffic-selector \S+ remote-ip (\S+)", line):
             remote.protected_subnets.append(m.group(1))
 
-    return VpnProfile(name=inferred or "imported-srx", vendor=v, local=local,
+    prof = VpnProfile(name=inferred or "imported-srx", vendor=v, local=local,
                       remote=remote, phase1=p1, phase2=p2)
+    if m := re.search(r"bind-interface (\S+)", text):
+        prof.tunnel_interface = m.group(1)
+    if m := re.search(r"gateway \S+ external-interface (\S+)", text):
+        prof.wan_interface = m.group(1)
+    if m := re.search(r"interfaces (\S+) family inet address (\S+)", text):
+        prof.tunnel_ip = m.group(2)
+    return prof
 
 
 def _import_digi(text: str, name: str | None) -> VpnProfile:

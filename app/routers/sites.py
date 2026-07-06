@@ -404,6 +404,33 @@ def delete_site(site_id: int, request: Request, db: Session = Depends(get_db),
 # --------------------------------------------------------------------------- #
 # Connections
 # --------------------------------------------------------------------------- #
+def _all_presumed_pairs(db: Session) -> list[dict]:
+    """Correlate every unpaired connection with the others and return each
+    presumed pair once (highest score first)."""
+    unpaired = db.execute(
+        select(VpnConnection).where(VpnConnection.peer_connection_id.is_(None))
+        .order_by(VpnConnection.id)
+    ).scalars().all()
+    seen, pairs = set(), []
+    for conn in unpaired:
+        for s in _suggest_peers(db, conn, _profile(conn)):
+            other = s["conn"]
+            key = tuple(sorted((conn.id, other.id)))
+            if key in seen:
+                continue
+            seen.add(key)
+            pairs.append({"a": conn, "b": other, "reasons": s["reasons"], "score": s["score"]})
+    pairs.sort(key=lambda x: -x["score"])
+    return pairs
+
+
+@conn_router.get("/relationships")
+def presumed_relationships(request: Request, db: Session = Depends(get_db),
+                           user: User = Depends(current_user)):
+    """Cross-site view of presumed tunnel relationships for approval."""
+    return render(request, "relationships.html", pairs=_all_presumed_pairs(db))
+
+
 @conn_router.get("/{conn_id}")
 def connection_detail(conn_id: int, request: Request, db: Session = Depends(get_db),
                       user: User = Depends(current_user)):
@@ -435,6 +462,19 @@ def connection_detail(conn_id: int, request: Request, db: Session = Depends(get_
                   bgp_suggest=bgp_suggest)
 
 
+def _same_tunnel_subnet(a: str, b: str) -> bool:
+    """True if two tunnel-interface addresses are distinct hosts in the same
+    small subnet (the classic /30 or /31 point-to-point tunnel pair)."""
+    import ipaddress
+    if not a or not b:
+        return False
+    try:
+        ia, ib = ipaddress.ip_interface(a), ipaddress.ip_interface(b)
+    except ValueError:
+        return False
+    return ia.ip != ib.ip and ia.network == ib.network and ia.network.prefixlen >= 29
+
+
 def _suggest_peers(db: Session, conn: VpnConnection, profile: VpnProfile) -> list[dict]:
     """Infer likely peer connections for an unpaired connection by matching
     endpoints/subnets. Returns candidates only — pairing needs user confirmation."""
@@ -459,6 +499,10 @@ def _suggest_peers(db: Session, conn: VpnConnection, profile: VpnProfile) -> lis
                 and sorted(profile.remote.protected_subnets) == sorted(op.local.protected_subnets)):
             reasons.append("protected subnets mirror")
             score += 1
+        # Tunnel IPs in the same subnet (e.g. a shared /30) — a strong peer signal.
+        if _same_tunnel_subnet(profile.tunnel_ip, op.tunnel_ip):
+            reasons.append("tunnel IPs share a subnet")
+            score += 2
         if reasons:
             out.append({"conn": other, "site": other.site, "reasons": reasons, "score": score})
     out.sort(key=lambda x: -x["score"])
