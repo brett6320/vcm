@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon %}
+{% block content %}
+<h1>Presumed tunnel relationships</h1>
+<p class="muted">Unpaired connections that look like two ends of the same tunnel,
+  correlated by public IPs, mirrored subnets, and shared tunnel-interface subnets.
+  Nothing is linked until you approve — approving shows the config diff first.</p>
+
+{% if pairs %}
+<div class="card">
+  <table>
+    <tr><th>Connection A</th><th>Connection B</th><th>Why</th><th>Score</th><th></th></tr>
+    {% for p in pairs %}
+    <tr>
+      <td><a href="/connections/{{ p.a.id }}">{{ p.a.name }}</a>
+        <span class="muted">{{ p.a.site.name }} ({{ p.a.site.vendor.label }})</span></td>
+      <td><a href="/connections/{{ p.b.id }}">{{ p.b.name }}</a>
+        <span class="muted">{{ p.b.site.name }} ({{ p.b.site.vendor.label }})</span></td>
+      <td class="muted">{{ p.reasons | join('; ') }}</td>
+      <td>{{ p.score }}</td>
+      <td>
+        <form method="post" action="/connections/{{ p.a.id }}/pair-confirm">
+          <input type="hidden" name="peer_id" value="{{ p.b.id }}">
+          <button class="btn small">Review &amp; pair</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<div class="card"><p class="muted">No presumed relationships found among unpaired
+  connections. Import or add more sites, or pair connections manually.</p></div>
+{% endif %}
+{% endblock %}
