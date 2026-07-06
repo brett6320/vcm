@@ -34,6 +34,17 @@ class Phase2:
 
 
 @dataclass
+class Bgp:
+    """Optional BGP over the tunnel. Peers over the tunnel inner addresses."""
+    enabled: bool = False
+    local_as: str = ""
+    peer_as: str = ""
+    peer_ip: str = ""            # BGP neighbor (far-end tunnel inner IP)
+    local_ip: str = ""           # local BGP source / router-id
+    networks: list[str] = field(default_factory=list)  # prefixes to advertise
+
+
+@dataclass
 class VpnProfile:
     name: str
     vendor: str                 # juniper_srx | digi | cradlepoint
@@ -43,6 +54,7 @@ class VpnProfile:
     phase1: Phase1 = field(default_factory=Phase1)
     phase2: Phase2 = field(default_factory=Phase2)
     psk: str = ""               # only if auth_method == psk (not recommended)
+    bgp: Bgp = field(default_factory=Bgp)
     # PKI references — which local cert/CA chain the device presents.
     local_cert_id: int | None = None
     ca_id: int | None = None
@@ -57,7 +69,8 @@ class VpnProfile:
             name=d["name"], vendor=d["vendor"], model=d.get("model", ""),
             local=Endpoint(**d.get("local", {})), remote=Endpoint(**d.get("remote", {})),
             phase1=Phase1(**d.get("phase1", {})), phase2=Phase2(**d.get("phase2", {})),
-            psk=d.get("psk", ""), local_cert_id=d.get("local_cert_id"),
+            psk=d.get("psk", ""), bgp=Bgp(**d.get("bgp", {})),
+            local_cert_id=d.get("local_cert_id"),
             ca_id=d.get("ca_id"), st0_unit=d.get("st0_unit", 0),
         )
 
@@ -68,6 +81,10 @@ class VpnProfile:
         m.name = new_name
         m.local, m.remote = m.remote, m.local
         m.local_cert_id, m.ca_id = None, self.ca_id
+        # Mirror BGP: swap ASNs and neighbor/local addresses for the far end.
+        if m.bgp.enabled:
+            m.bgp.local_as, m.bgp.peer_as = self.bgp.peer_as, self.bgp.local_as
+            m.bgp.peer_ip, m.bgp.local_ip = self.bgp.local_ip, self.bgp.peer_ip
         return m
 
 

@@ -12,7 +12,7 @@ from ..models import Site, User, Vendor, VpnConnection
 from ..security.deps import audit, current_user, require_admin
 from ..srx import defaults as defaults_svc
 from ..srx import generators, importer, proposals, rename as rename_mod, suggest
-from ..srx.model import Endpoint, Phase1, Phase2, VpnProfile, all_warnings
+from ..srx.model import Bgp, Endpoint, Phase1, Phase2, VpnProfile, all_warnings
 from ..templates_env import render
 
 router = APIRouter(prefix="/sites", tags=["sites"])
@@ -74,6 +74,13 @@ def _sites_page(request: Request, db: Session, **extra):
                   vendor_catalog=_vendor_catalog(), default_vendor=default_vendor, **extra)
 
 
+def _bgp_from_form(bgp_enabled, bgp_local_as, bgp_peer_as, bgp_peer_ip, bgp_local_ip,
+                   bgp_networks) -> Bgp:
+    return Bgp(enabled=bool(bgp_enabled), local_as=bgp_local_as.strip(),
+               peer_as=bgp_peer_as.strip(), peer_ip=bgp_peer_ip.strip(),
+               local_ip=bgp_local_ip.strip(), networks=_subnets(bgp_networks))
+
+
 def _build_profile_from_form(db, name, vendor, model, local_ip, local_id, local_subnets,
                              remote_ip, remote_id, remote_subnets, auth_method, psk,
                              p1_enc, p1_integ, p1_dh, p1_ver, p2_enc, p2_integ, p2_pfs):
@@ -132,6 +139,9 @@ def generate_site(request: Request,
                   p1_enc: str = Form(""), p1_integ: str = Form(""), p1_dh: str = Form(""),
                   p1_ver: str = Form(""),
                   p2_enc: str = Form(""), p2_integ: str = Form(""), p2_pfs: str = Form(""),
+                  bgp_enabled: str = Form(""), bgp_local_as: str = Form(""),
+                  bgp_peer_as: str = Form(""), bgp_peer_ip: str = Form(""),
+                  bgp_local_ip: str = Form(""), bgp_networks: str = Form(""),
                   db: Session = Depends(get_db), user: User = Depends(current_user)):
     errors = _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method, psk, local_ip)
     if errors:
@@ -146,6 +156,8 @@ def generate_site(request: Request,
                                        local_subnets, remote_ip, remote_id, remote_subnets,
                                        auth_method, psk, p1_enc, p1_integ, p1_dh, p1_ver,
                                        p2_enc, p2_integ, p2_pfs)
+    profile.bgp = _bgp_from_form(bgp_enabled, bgp_local_as, bgp_peer_as, bgp_peer_ip,
+                                 bgp_local_ip, bgp_networks)
     conn = VpnConnection(site_id=site.id, name=cname, source="generated", params_json="{}")
     _save_profile(conn, site, profile)
     db.add(conn)
@@ -213,6 +225,9 @@ def add_connection(site_id: int, request: Request,
                    p1_enc: str = Form(""), p1_integ: str = Form(""), p1_dh: str = Form(""),
                    p1_ver: str = Form(""),
                    p2_enc: str = Form(""), p2_integ: str = Form(""), p2_pfs: str = Form(""),
+                   bgp_enabled: str = Form(""), bgp_local_as: str = Form(""),
+                   bgp_peer_as: str = Form(""), bgp_peer_ip: str = Form(""),
+                   bgp_local_ip: str = Form(""), bgp_networks: str = Form(""),
                    db: Session = Depends(get_db), user: User = Depends(current_user)):
     site = db.get(Site, site_id)
     if not site:
@@ -225,6 +240,8 @@ def add_connection(site_id: int, request: Request,
                                        local_ip, local_id, local_subnets, remote_ip, remote_id,
                                        remote_subnets, auth_method, psk, p1_enc, p1_integ,
                                        p1_dh, p1_ver, p2_enc, p2_integ, p2_pfs)
+    profile.bgp = _bgp_from_form(bgp_enabled, bgp_local_as, bgp_peer_as, bgp_peer_ip,
+                                 bgp_local_ip, bgp_networks)
     conn = VpnConnection(site_id=site.id, name=cname, source="generated", params_json="{}")
     _save_profile(conn, site, profile)
     db.add(conn)

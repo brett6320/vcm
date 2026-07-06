@@ -63,6 +63,19 @@
       <div><label>P2 integrity</label>{{ vendor_select('p2_integ', vopts.integrity, defaults.phase2.integrity) }}</div>
       <div><label>P2 PFS group</label>{{ vendor_select('p2_pfs', vopts.dh_groups, defaults.phase2.pfs_group) }}</div>
     </div>
+    <fieldset style="margin-top:.8rem"><legend>BGP over tunnel (optional)</legend>
+      <label><input type="checkbox" name="bgp_enabled" value="1" style="width:auto"> Enable BGP</label>
+      <div class="row3">
+        <div><label>Local AS</label><input name="bgp_local_as" placeholder="65001"></div>
+        <div><label>Peer AS</label><input name="bgp_peer_as" placeholder="65002"></div>
+        <div><label>Peer IP (neighbor)</label><input name="bgp_peer_ip" placeholder="tunnel inner IP"></div>
+      </div>
+      <div class="row">
+        <div><label>Local BGP IP / router-id</label><input name="bgp_local_ip"></div>
+        <div><label>Networks to advertise</label><input name="bgp_networks" placeholder="10.1.0.0/24, ..."></div>
+      </div>
+      <p class="muted">Supported: Juniper SRX, Cisco Firepower, FortiGate, Palo Alto, MikroTik, pfSense (FRR).</p>
+    </fieldset>
     <button class="btn" style="margin-top:.8rem">Create site + connection</button>
   </form>
 </div>
