@@ -300,23 +300,29 @@ def test_import_extracts_only_vpn_sections():
     assert "ge-0/0/1" not in kept
     assert "set security ike proposal" in kept
 
-    # pfSense: only connections/secrets blocks retained.
-    pf = generators.generate(_mk_profile(vendor="pfsense"))
-    noisy_pf = "system {\n  hostname = fw2\n}\n" + pf + "\nunrelated { x = 1 }\n"
-    kept_pf = importer.extract_vpn_sections(noisy_pf, "pfsense")
-    assert "hostname" not in kept_pf
-    assert "unrelated" not in kept_pf
-    assert "connections {" in kept_pf
+    # strongSwan swanctl: only connections/secrets blocks retained.
+    ss = generators.generate(_mk_profile(vendor="strongswan"))
+    noisy_ss = "system {\n  hostname = fw2\n}\n" + ss + "\nunrelated { x = 1 }\n"
+    kept_ss = importer.extract_vpn_sections(noisy_ss, "strongswan")
+    assert "hostname" not in kept_ss
+    assert "unrelated" not in kept_ss
+    assert "connections {" in kept_ss
 
 
-def test_pfsense_roundtrip():
+def test_pfsense_gui_output():
+    # pfSense is GUI/config.xml-driven, so we emit the GUI field values.
     p = _mk_profile(vendor="pfsense", p1={"encryption": "aes-256-gcm", "dh_group": "20"})
+    p.wan_interface = "WAN"
     cfg = generators.generate(p)
-    assert "esp_proposals" in cfg
-    back = importer.import_config(cfg)
-    assert back.vendor == "pfsense"
-    assert back.phase1.encryption == "aes-256-gcm"
-    assert back.phase1.dh_group == "20"
+    assert "VPN > IPsec > Tunnels" in cfg
+    assert "Key Exchange version : IKEv2" in cfg
+    assert "Encryption Algorithm : AES256-GCM" in cfg   # AEAD, no separate hash
+    assert "DH Group             : 20" in cfg
+    assert "Interface            : WAN" in cfg
+    # CBC shows key length + hash
+    p2 = _mk_profile(vendor="pfsense", p1={"encryption": "aes-256-cbc", "integrity": "sha256"})
+    c2 = generators.generate(p2)
+    assert "AES" in c2 and "Key length: 256 bits" in c2 and "Hash                 : SHA256" in c2
 
 
 def test_peer_mirror_is_compatible():
