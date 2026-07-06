@@ -185,6 +185,21 @@ class UserSession(Base):
     user: Mapped[User] = relationship()
 
 
+class Backup(Base):
+    """A versioned, encrypted snapshot of application state (AES-256-GCM via KEK)."""
+
+    __tablename__ = "backups"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sha256: Mapped[str] = mapped_column(String(64))       # of plaintext, integrity check
+    size: Mapped[int] = mapped_column(Integer)            # plaintext size
+    payload: Mapped[bytes] = mapped_column(LargeBinary)   # encrypted snapshot
+
+
 class IPAllowEntry(Base):
     __tablename__ = "ip_allowlist"
 

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import backup as backup_mod
+from .. import notify as notify_mod
+from ..config import get_settings
 from ..db import get_db
-from ..models import AuditLog, IPAllowEntry, Role, User
+from ..models import AuditLog, Backup, IPAllowEntry, Role, User
 from ..security.deps import audit, require_admin
 from ..security.passwords import hash_password
-from .. import notify as notify_mod
 from ..srx import defaults as defaults_svc
 from ..srx import proposals as proposals_mod
 from ..srx.proposals import catalog
@@ -187,6 +189,83 @@ def save_defaults(request: Request,
     defaults_svc.set_defaults(db, phase1, phase2)
     audit(db, request, "admin.defaults_save", user=user)
     return RedirectResponse("/admin/defaults", status_code=303)
+
+
+# ---------------------------------------------------------------- backups --- #
+def _backups(db: Session):
+    return db.execute(select(Backup).order_by(Backup.version.desc())).scalars().all()
+
+
+@router.get("/backups")
+def backups_home(request: Request, db: Session = Depends(get_db),
+                 user: User = Depends(require_admin)):
+    return render(request, "backups.html", backups=_backups(db))
+
+
+@router.post("/backups/create")
+def backups_create(request: Request, note: str = Form(""), db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)):
+    b = backup_mod.create_backup(db, note=note, by=user.username)
+    audit(db, request, "backup.create", f"v{b.version}", user=user)
+    return RedirectResponse("/admin/backups", status_code=303)
+
+
+@router.get("/backups/{bid}/download")
+def backups_download(bid: int, db: Session = Depends(get_db),
+                     user: User = Depends(require_admin)):
+    b = db.get(Backup, bid)
+    if not b:
+        raise HTTPException(404, "Not found")
+    fname = f"vcm-backup-v{b.version}.vcmbak"
+    return Response(b.payload, media_type="application/octet-stream",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+@router.post("/backups/{bid}/restore")
+def backups_restore(bid: int, request: Request, confirm: str = Form(""),
+                    db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    b = db.get(Backup, bid)
+    if not b:
+        raise HTTPException(404, "Not found")
+    if confirm != "RESTORE":
+        return render(request, "backups.html", backups=_backups(db),
+                      error='Type RESTORE to confirm.')
+    backup_mod.restore_backup(db, b, by=user.username)
+    audit(db, request, "backup.restore", f"v{b.version}", user=user)
+    resp = RedirectResponse("/login", status_code=303)   # sessions wiped by restore
+    resp.delete_cookie(get_settings().session_cookie)
+    return resp
+
+
+@router.post("/backups/upload-restore")
+async def backups_upload_restore(request: Request, confirm: str = Form(""),
+                                 file: UploadFile = File(...),
+                                 db: Session = Depends(get_db),
+                                 user: User = Depends(require_admin)):
+    if confirm != "RESTORE":
+        return render(request, "backups.html", backups=_backups(db),
+                      error='Type RESTORE to confirm.')
+    payload = await file.read()
+    try:
+        backup_mod.restore_from_bytes(db, payload, by=user.username)
+    except Exception as e:  # noqa: BLE001
+        return render(request, "backups.html", backups=_backups(db),
+                      error=f"Restore failed (wrong KEK or corrupt file?): {e}")
+    audit(db, request, "backup.upload_restore", file.filename, user=user)
+    resp = RedirectResponse("/login", status_code=303)
+    resp.delete_cookie(get_settings().session_cookie)
+    return resp
+
+
+@router.post("/backups/{bid}/delete")
+def backups_delete(bid: int, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)):
+    b = db.get(Backup, bid)
+    if b:
+        v = b.version
+        db.delete(b)
+        audit(db, request, "backup.delete", f"v{v}", user=user)
+    return RedirectResponse("/admin/backups", status_code=303)
 
 
 # ------------------------------------------------------------------ audit --- #
