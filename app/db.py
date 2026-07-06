@@ -48,6 +48,57 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     add_missing_columns(engine)
+    _relax_ca_name_uniqueness(engine)
+    _backfill_cert_fingerprints(engine)
+
+
+def _relax_ca_name_uniqueness(eng) -> None:
+    """CA identity moved from name to certificate fingerprint. Drop the legacy
+    unique constraint on cert_authorities.name if a prior schema created it
+    (Postgres). SQLite can't drop it, but create_all never adds it now."""
+    if eng.dialect.name != "postgresql":
+        return
+    try:
+        with eng.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE cert_authorities DROP CONSTRAINT IF EXISTS "
+                "cert_authorities_name_key"))
+    except Exception as e:  # noqa: BLE001
+        log.error("schema sync: could not drop cert_authorities_name_key: %s", e)
+
+
+def _backfill_cert_fingerprints(eng) -> None:
+    """Populate the new fingerprint columns for rows imported before it existed."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+
+    def _fp(pem: str) -> str | None:
+        try:
+            return x509.load_pem_x509_certificate(pem.encode()).fingerprint(
+                hashes.SHA256()).hex()
+        except Exception:  # noqa: BLE001
+            return None
+
+    insp = inspect(eng)
+    for table in ("cert_authorities", "certificates"):
+        if not insp.has_table(table):
+            continue
+        cols = {c["name"] for c in insp.get_columns(table)}
+        if "fingerprint" not in cols or "cert_pem" not in cols:
+            continue
+        try:
+            with eng.begin() as conn:
+                rows = conn.execute(text(
+                    f"SELECT id, cert_pem FROM {table} WHERE fingerprint IS NULL "
+                    "AND cert_pem IS NOT NULL AND cert_pem <> ''")).fetchall()
+                for rid, pem in rows:
+                    fp = _fp(pem)
+                    if fp:
+                        conn.execute(
+                            text(f"UPDATE {table} SET fingerprint = :fp WHERE id = :id"),
+                            {"fp": fp, "id": rid})
+        except Exception as e:  # noqa: BLE001
+            log.error("schema sync: fingerprint backfill on %s failed: %s", table, e)
 
 
 def add_missing_columns(eng) -> None:

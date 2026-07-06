@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from cryptography import x509
+from cryptography.hazmat.primitives import hashes
 
 from ..config import get_settings
 from ..db import get_db
@@ -298,6 +299,12 @@ async def import_cert(request: Request, cert_pem: str = Form(""),
         cert = x509.load_pem_x509_certificate(cert_pem.encode())
         if _is_ca_cert(cert):
             raise ValueError("This is a CA certificate — import it under 'Import existing CA'.")
+        # Identity is the fingerprint — refuse the same cert twice (managed or observed).
+        fp = cert.fingerprint(hashes.SHA256()).hex()
+        dupe = db.execute(
+            select(Certificate).where(Certificate.fingerprint == fp)).scalar_one_or_none()
+        if dupe is not None:
+            raise ValueError(f"This certificate is already tracked (serial {dupe.serial}).")
         not_after = ca_ops._aware(cert.not_valid_after_utc)
         status = CertStatus.expired if classify_expiry(not_after) == "expired" \
             else CertStatus.active
@@ -307,6 +314,7 @@ async def import_cert(request: Request, cert_pem: str = Form(""),
             subject_dn=cert.subject.rfc4514_string(),
             san=_san_from_cert(cert),
             cert_pem=cert.public_bytes(ca_ops.serialization_encoding()).decode(),
+            fingerprint=fp,
             status=status,
             not_before=ca_ops._aware(cert.not_valid_before_utc),
             not_after=not_after,

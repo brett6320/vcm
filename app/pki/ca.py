@@ -43,11 +43,33 @@ def dn_to_str(name: x509.Name) -> str:
     return name.rfc4514_string()
 
 
-def _require_unique_name(db: Session, name: str) -> None:
-    """CA names are unique; fail with a clear message instead of a DB IntegrityError."""
-    if db.execute(select(CertAuthority).where(CertAuthority.name == name)
-                  ).scalar_one_or_none() is not None:
-        raise ValueError(f"A CA named '{name}' already exists — choose a different name.")
+def cert_fingerprint(cert_pem: str) -> str:
+    """SHA-256 fingerprint (hex) of a certificate — its stable identity."""
+    cert = x509.load_pem_x509_certificate(cert_pem.encode())
+    return cert.fingerprint(hashes.SHA256()).hex()
+
+
+def _unique_ca_name(db: Session, base: str) -> str:
+    """CA names are labels, not identity — auto-deduplicate rather than reject."""
+    name, i = base, 2
+    while db.execute(select(CertAuthority).where(CertAuthority.name == name)
+                     ).scalar_one_or_none() is not None:
+        name = f"{base}-{i}"
+        i += 1
+    return name
+
+
+def _reject_duplicate_ca_cert(db: Session, fingerprint: str) -> None:
+    """Identity is the cert fingerprint: refuse importing the same CA cert twice,
+    regardless of the name entered."""
+    existing = db.execute(
+        select(CertAuthority).where(CertAuthority.fingerprint == fingerprint)
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise ValueError(
+            f"This exact CA certificate is already present (as '{existing.name}'). "
+            "The same certificate cannot be added twice."
+        )
 
 
 def _next_serial(db: Session, ca: CertAuthority) -> int:
@@ -72,7 +94,7 @@ def create_ca(
     parent: CertAuthority | None = None,
     path_len: int | None = None,
 ) -> CertAuthority:
-    _require_unique_name(db, name)
+    name = _unique_ca_name(db, name)
     if ca_type != CAType.root and parent is None:
         raise ValueError("Intermediate/issuing CA requires a parent CA")
     if ca_type == CAType.root and parent is not None:
@@ -135,12 +157,14 @@ def create_ca(
 
     cert = builder.sign(issuer_key, _hash_for(issuer_key))
 
+    cert_pem = cert.public_bytes(serialization_encoding()).decode()
     ca = CertAuthority(
         name=name,
         ca_type=ca_type,
         parent_id=parent.id if parent else None,
         subject_dn=dn_to_str(subject),
-        cert_pem=cert.public_bytes(serialization_encoding()).decode(),
+        cert_pem=cert_pem,
+        fingerprint=cert.fingerprint(hashes.SHA256()).hex(),
         key_enc=keys.wrap_private_key(key),
         key_type=key_type,
         key_params=key_params,
@@ -270,7 +294,14 @@ def complete_pending_ca(db: Session, ca: CertAuthority, cert_pem: str,
                 "Uploaded certificate issuer does not match the recorded parent CA."
             )
 
+    fp = cert.fingerprint(hashes.SHA256()).hex()
+    dupe = db.execute(
+        select(CertAuthority).where(CertAuthority.fingerprint == fp, CertAuthority.id != ca.id)
+    ).scalar_one_or_none()
+    if dupe is not None:
+        raise ValueError(f"This certificate already belongs to CA '{dupe.name}'.")
     ca.cert_pem = cert.public_bytes(serialization_encoding()).decode()
+    ca.fingerprint = fp
     ca.subject_dn = dn_to_str(cert.subject)
     ca.not_before = _aware(cert.not_valid_before_utc)
     ca.not_after = _aware(cert.not_valid_after_utc)
@@ -310,8 +341,12 @@ def import_ca(
 ) -> CertAuthority:
     from cryptography.hazmat.primitives import serialization
 
-    _require_unique_name(db, name)
     cert = x509.load_pem_x509_certificate(cert_pem.encode())
+    fingerprint = cert.fingerprint(hashes.SHA256()).hex()
+    # Identity is the fingerprint: block the *same* cert twice; the name is just a
+    # label and is auto-deduplicated if it collides with a different cert.
+    _reject_duplicate_ca_cert(db, fingerprint)
+    name = _unique_ca_name(db, name)
     # Must be a CA certificate.
     try:
         bc = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
@@ -359,6 +394,7 @@ def import_ca(
         parent_id=parent.id if parent else None,
         subject_dn=dn_to_str(cert.subject),
         cert_pem=cert.public_bytes(serialization_encoding()).decode(),
+        fingerprint=fingerprint,
         key_enc=key_enc,
         key_type=key_type,
         key_params=key_params,
@@ -584,6 +620,7 @@ def sign_csr(
         subject_dn=dn_to_str(csr.subject),
         san=",".join((san_dns or []) + (san_ip or [])) or None,
         cert_pem=cert.public_bytes(serialization_encoding()).decode(),
+        fingerprint=cert.fingerprint(hashes.SHA256()).hex(),
         csr_pem=csr.public_bytes(serialization_encoding()).decode(),
         status=CertStatus.active,
         not_before=now,
