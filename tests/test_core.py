@@ -1621,7 +1621,13 @@ def test_import_leaf_cert_is_observed():
     c = _admin_client("leafimp")
     try:
         pem = _make_leaf_pem(cn="obs.example.com", days_valid=200, san=["obs.example.com"])
-        r = c.post("/pki/cert/import", data={"cert_pem": pem}, follow_redirects=False)
+        # Unknown issuer -> prompted to pick the signing CA.
+        r = c.post("/pki/cert/import", data={"cert_pem": pem})
+        assert "Which CA signed" in r.text
+        # Observe it as external (not in VCM) -> imported unlinked.
+        r = c.post("/pki/cert/import",
+                   data={"cert_pem": pem, "ca_prompted": "1", "signing_ca_id": "external"},
+                   follow_redirects=False)
         assert r.status_code == 303
         cid = int(r.headers["location"].split("/")[-1])
         with SessionLocal() as db:
@@ -1790,3 +1796,80 @@ def test_api_bearer_auth_scope_and_lifecycle():
     # (empty allowlist => loopback-only fallback; 203.0.113.7 is not loopback).
     with TestClient(app, client=("203.0.113.7", 1)) as c2:
         assert c2.get("/api/sites", headers=AH).status_code == 403
+
+
+def test_leaf_import_autodetect_and_prompt_validate():
+    import datetime, json
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal, init_db
+    from app.pki import ca as ca_ops
+    from app.models import User, Role, CAType, CertAuthority, Certificate
+    from app.security.passwords import hash_password
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    import pyotp, re
+    init_db()
+
+    def _leaf(issuer_key, issuer_name, cn):
+        k = ec.generate_private_key(ec.SECP256R1())
+        return (x509.CertificateBuilder()
+                .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)]))
+                .issuer_name(issuer_name).public_key(k.public_key()).serial_number(7)
+                .not_valid_before(datetime.datetime(2024, 1, 1))
+                .not_valid_after(datetime.datetime(2032, 1, 1))
+                .add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
+                .sign(issuer_key, hashes.SHA256()))
+
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            db.query(Certificate).delete(); db.query(CertAuthority).delete(); db.commit()
+            if not db.query(User).filter_by(username="lf").first():
+                db.add(User(username="lf", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+            root = ca_ops.create_ca(db, name="LeafRoot", dn={"CN": "Leaf Root"},
+                                    ca_type=CAType.root, key_type="ec",
+                                    key_params="secp256r1", valid_days=3650)
+            db.commit()
+            rid = root.id
+            root_key = ca_ops.keys.unwrap_private_key(root.key_enc)
+            root_x = x509.load_pem_x509_certificate(root.cert_pem.encode())
+        c.post("/login", data={"username": "lf", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+
+        # (1) Auto-detect: leaf signed by the known root -> linked to it, no prompt.
+        signed = _leaf(root_key, root_x.subject, "auto.example.com")
+        pem = signed.public_bytes(serialization.Encoding.PEM).decode()
+        r = c.post("/pki/cert/import", data={"cert_pem": pem}, follow_redirects=False)
+        assert r.status_code == 303
+        with SessionLocal() as db:
+            row = db.query(Certificate).filter_by(subject_dn="CN=auto.example.com").one()
+            assert row.ca_id == rid and row.managed is False
+
+        # (2) Unknown issuer -> prompt page (not imported yet).
+        other_key = ec.generate_private_key(ec.SECP256R1())
+        other_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Some Other CA")])
+        orphan = _leaf(other_key, other_name, "orphan.example.com")
+        opem = orphan.public_bytes(serialization.Encoding.PEM).decode()
+        r = c.post("/pki/cert/import", data={"cert_pem": opem})
+        assert "Which CA signed" in r.text
+        with SessionLocal() as db:
+            assert db.query(Certificate).filter_by(subject_dn="CN=orphan.example.com").count() == 0
+
+        # (2a) Answering with a CA that did NOT sign it -> rejected.
+        r = c.post("/pki/cert/import",
+                   data={"cert_pem": opem, "ca_prompted": "1", "signing_ca_id": str(rid)})
+        assert "did not sign" in r.text
+
+        # (2b) Observe as external -> imported unlinked.
+        r = c.post("/pki/cert/import",
+                   data={"cert_pem": opem, "ca_prompted": "1", "signing_ca_id": "external"},
+                   follow_redirects=False)
+        assert r.status_code == 303
+        with SessionLocal() as db:
+            row = db.query(Certificate).filter_by(subject_dn="CN=orphan.example.com").one()
+            assert row.ca_id is None

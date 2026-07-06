@@ -49,6 +49,37 @@ def cert_fingerprint(cert_pem: str) -> str:
     return cert.fingerprint(hashes.SHA256()).hex()
 
 
+def verify_signed_by(cert: x509.Certificate, issuer_cert: x509.Certificate) -> bool:
+    """True if `issuer_cert`'s public key actually signed `cert`."""
+    from cryptography.hazmat.primitives.asymmetric import padding
+    pub = issuer_cert.public_key()
+    try:
+        if isinstance(pub, rsa.RSAPublicKey):
+            pub.verify(cert.signature, cert.tbs_certificate_bytes,
+                       padding.PKCS1v15(), cert.signature_hash_algorithm)
+        elif isinstance(pub, ec.EllipticCurvePublicKey):
+            pub.verify(cert.signature, cert.tbs_certificate_bytes,
+                       ec.ECDSA(cert.signature_hash_algorithm))
+        else:
+            return False
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def find_issuer_ca(db: Session, cert: x509.Certificate) -> CertAuthority | None:
+    """The known CA that actually signed `cert` (subject matches issuer AND the
+    signature verifies), or None if it can't be determined."""
+    for ca in db.execute(select(CertAuthority).where(CertAuthority.pending.is_(False))
+                         ).scalars():
+        if not ca.cert_pem:
+            continue
+        ca_cert = x509.load_pem_x509_certificate(ca.cert_pem.encode())
+        if ca_cert.subject == cert.issuer and verify_signed_by(cert, ca_cert):
+            return ca
+    return None
+
+
 def _unique_ca_name(db: Session, base: str) -> str:
     """CA names are labels, not identity — auto-deduplicate rather than reject."""
     name, i = base, 2
