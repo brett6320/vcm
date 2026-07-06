@@ -49,7 +49,34 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     add_missing_columns(engine)
     _relax_ca_name_uniqueness(engine)
+    _relax_nullable_columns(engine)
     _backfill_cert_fingerprints(engine)
+
+
+def _relax_nullable_columns(eng) -> None:
+    """Additive sync adds columns but never relaxes NOT NULL on existing ones.
+    Some columns became nullable after their table already existed (e.g.
+    certificates.ca_id — observed leaf certs have no issuing CA). Drop NOT NULL
+    where the current model says the column is nullable (Postgres; DROP NOT NULL
+    is idempotent). SQLite can't ALTER, but create_all makes it nullable there."""
+    if eng.dialect.name != "postgresql":
+        return
+    for table in ("certificates",):
+        insp = inspect(eng)
+        if not insp.has_table(table):
+            continue
+        model_tbl = Base.metadata.tables.get(table)
+        db_cols = {c["name"]: c for c in insp.get_columns(table)}
+        for col in (model_tbl.columns if model_tbl is not None else []):
+            info = db_cols.get(col.name)
+            if col.nullable and info is not None and info.get("nullable") is False:
+                try:
+                    with eng.begin() as conn:
+                        conn.execute(text(
+                            f"ALTER TABLE {table} ALTER COLUMN {col.name} DROP NOT NULL"))
+                    log.warning("schema sync: relaxed NOT NULL on %s.%s", table, col.name)
+                except Exception as e:  # noqa: BLE001
+                    log.error("schema sync: could not relax %s.%s: %s", table, col.name, e)
 
 
 def _relax_ca_name_uniqueness(eng) -> None:
