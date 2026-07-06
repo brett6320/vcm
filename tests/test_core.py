@@ -378,6 +378,60 @@ def test_notify_backends_disabled_by_default():
     assert not notify.email_enabled() and not notify.sms_enabled()
 
 
+def test_connection_name_slugified():
+    from app.routers.sites import _slug
+    assert _slug("HQ to DC") == "HQ-to-DC"
+    assert _slug("  spaced  name ") == "spaced-name"
+    assert _slug("ok_name.1-2") == "ok_name.1-2"
+    assert _slug("weird/@#chars!") == "weird-chars"
+
+
+def test_change_remote_device_on_connection():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, VpnConnection
+    from app.security.passwords import hash_password
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="dev").first():
+                db.add(User(username="dev", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        import pyotp, re
+        c.post("/login", data={"username": "dev", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+        g = dict(local_ip="198.51.100.1", remote_ip="203.0.113.1",
+                 local_subnets="10.1.0.0/24", remote_subnets="10.2.0.0/24",
+                 auth_method="certificate")
+        r = c.post("/sites/generate", data=dict(name="HQ", vendor="juniper_srx", **g),
+                   follow_redirects=False)
+        cid = r.headers["location"].split("/")[-1]
+        # build far-end on a new site DC1
+        c.post(f"/connections/{cid}/peer",
+               data=dict(target="new", new_site_name="DC1", peer_vendor="juniper_srx",
+                         peer_public_ip="203.0.113.1"))
+        with SessionLocal() as db:
+            conn = db.get(VpnConnection, int(cid))
+            first_peer = conn.peer_connection_id
+            assert first_peer is not None
+        # re-point to a different new far-end DC2
+        c.post(f"/connections/{cid}/peer",
+               data=dict(target="new", new_site_name="DC2", peer_vendor="palo_alto",
+                         peer_public_ip="203.0.113.9"))
+        with SessionLocal() as db:
+            conn = db.get(VpnConnection, int(cid))
+            assert conn.peer_connection_id is not None
+            assert conn.peer_connection_id != first_peer          # remote changed
+            old = db.get(VpnConnection, first_peer)
+            assert old.peer_connection_id is None                 # old peer unlinked
+        # unpair
+        c.post(f"/connections/{cid}/unpair")
+        with SessionLocal() as db:
+            assert db.get(VpnConnection, int(cid)).peer_connection_id is None
+
+
 def test_forced_password_change_flow():
     from fastapi.testclient import TestClient
     from app.main import app

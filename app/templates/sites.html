@@ -31,7 +31,7 @@
         {% for v in vendors %}<option value="{{ v.value }}" {% if v.value == default_vendor %}selected{% endif %}>{{ v.label }}</option>{% endfor %}</select></div>
       <div><label>Model</label><input name="model" placeholder="SRX300 / IX20 / IBR900"></div>
     </div>
-    <label>Connection name</label><input name="conn_name" placeholder="e.g. hq-to-dc (blank = auto)">
+    <label>Connection name</label><input name="conn_name" placeholder="e.g. hq-to-dc (identifier; spaces become hyphens)">
     <div class="row">
       <fieldset><legend>Local endpoint</legend>
         <label>Public IP *</label><input name="local_ip" required>
