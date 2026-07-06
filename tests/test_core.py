@@ -1928,3 +1928,31 @@ def test_import_update_keeps_bgp():
     # Untouched when BGP is off.
     p.bgp = Bgp(enabled=False)
     assert _imported_config(p, raw) == raw
+
+
+def test_api_calls_are_audit_logged():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, ApiToken, AuditLog
+    from app.security.passwords import hash_password
+    from app.security.apitokens import hash_token
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="apiaud").first():
+                db.add(User(username="apiaud", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        _login_mfa(c, "apiaud")
+        tok = _create_token_via_ui(c, "auditor-tok", "read")
+        with SessionLocal() as db:
+            prefix = db.query(ApiToken).filter_by(token_hash=hash_token(tok)).one().prefix
+            before = db.query(AuditLog).filter_by(action="api.call").count()
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        c.get("/api/sites", headers={"Authorization": f"Bearer {tok}"})
+        c.get("/api/whoami", headers={"Authorization": f"Bearer {tok}"})
+        with SessionLocal() as db:
+            rows = db.query(AuditLog).filter_by(action="api.call").all()
+            assert len(rows) >= before + 2
+            recent = [r for r in rows if r.detail and "/api/sites" in r.detail]
+            assert recent and prefix in recent[-1].detail and recent[-1].username == "apiaud"
