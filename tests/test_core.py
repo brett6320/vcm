@@ -1873,3 +1873,38 @@ def test_leaf_import_autodetect_and_prompt_validate():
         with SessionLocal() as db:
             row = db.query(Certificate).filter_by(subject_dn="CN=orphan.example.com").one()
             assert row.ca_id is None
+
+
+def test_digi_zip_import_and_bgp_prefix_extraction():
+    import io, zipfile
+    from app.srx import importer as imp
+    # Digi ZIP backup: unpack to the config-bearing member, ignore noise.
+    cfg = ("ipsec tunnel1 peer 203.0.113.1\nipsec tunnel1 ike_version 2\n"
+           "ipsec tunnel1 ike_enc aes256\n")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("readme.txt", "not a config")
+        z.writestr("backup/config.da", cfg)
+    text = imp.config_from_upload(buf.getvalue(), "backup.zip")
+    assert "ipsec tunnel1" in text
+    site = imp.import_site(text)
+    assert site["vendor"] == "digi" and site["connections"]
+
+    # A non-zip upload still decodes normally.
+    assert imp.config_from_upload(b"set security ike proposal p", "x.conf").startswith("set")
+
+    # Section extraction now keeps BGP + prefix-lists (so re-import diffs them).
+    cisco = ("crypto map m 10 set peer 1.1.1.1\nrouter bgp 65001\n"
+             " neighbor 169.254.0.2 remote-as 65002\n"
+             " network 10.1.0.0 mask 255.255.255.0\n"
+             "ip prefix-list PL seq 5 permit 10.1.0.0/24\n"
+             "interface Gi0\n description unrelated\n")
+    ck = imp.extract_vpn_sections(cisco, "cisco_firepower")
+    assert "router bgp 65001" in ck and "neighbor 169.254.0.2" in ck
+    assert "ip prefix-list PL" in ck and "unrelated" not in ck
+
+    jun = ("set security ike gateway g address 1.1.1.1\n"
+           "set protocols bgp group g neighbor 169.254.0.2\n"
+           "set policy-options prefix-list PL 10.1.0.0/24\nset system host-name fw\n")
+    jk = imp.extract_vpn_sections(jun, "juniper_srx")
+    assert "protocols bgp" in jk and "policy-options prefix-list" in jk and "host-name" not in jk
