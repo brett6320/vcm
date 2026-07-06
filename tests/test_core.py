@@ -1,3 +1,4 @@
+import pytest
 import base64
 import os
 
@@ -861,3 +862,67 @@ def test_admin_delete_certificate_requires_serial():
         assert r.status_code == 303
         with SessionLocal() as db:
             assert db.get(Certificate, cid) is None
+
+
+def test_load_material_p12_and_pem():
+    import datetime
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import pkcs12
+    from app.pki import material
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    nm = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+    cert = (x509.CertificateBuilder().subject_name(nm).issuer_name(nm)
+            .public_key(key.public_key()).serial_number(1)
+            .not_valid_before(datetime.datetime(2024, 1, 1))
+            .not_valid_after(datetime.datetime(2034, 1, 1))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+            .sign(key, hashes.SHA256()))
+
+    # Password-protected PKCS#12 → cert + key.
+    blob = pkcs12.serialize_key_and_certificates(
+        b"ca", key, cert, None, serialization.BestAvailableEncryption(b"secret"))
+    assert material.looks_like_p12("ca.p12", blob)
+    c, k = material.load_material("ca.p12", blob, "secret")
+    assert c.startswith("-----BEGIN CERTIFICATE") and k.startswith("-----BEGIN PRIVATE KEY")
+
+    # Wrong password fails clearly.
+    with pytest.raises(Exception):
+        material.load_material("ca.p12", blob, "wrong")
+
+    # PEM bundle and cert-only PEM.
+    pem = cert.public_bytes(serialization.Encoding.PEM) + key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption())
+    c2, k2 = material.load_material("ca.pem", pem, None)
+    assert k2.startswith("-----BEGIN PRIVATE KEY")
+    c3, k3 = material.load_material("c.pem", cert.public_bytes(serialization.Encoding.PEM), None)
+    assert c3.startswith("-----BEGIN CERTIFICATE") and k3 is None
+
+
+def test_create_ca_under_keyless_parent_errors_cleanly():
+    # Importing a root cert-only (no key), then creating a child under it must
+    # raise a clear error — not blow up decrypting an empty key blob.
+    import pytest
+    from app.db import SessionLocal
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority
+    with SessionLocal() as db:
+        db.query(CertAuthority).delete()
+        db.commit()
+        # Build a self-signed root and import it WITHOUT its key.
+        root = ca_ops.create_ca(db, name="realroot", dn={"CN": "Real Root"},
+                                ca_type=CAType.root, key_type="ec",
+                                key_params="secp256r1", valid_days=3650)
+        cert_pem = root.cert_pem
+        db.query(CertAuthority).delete()
+        db.commit()
+        keyless = ca_ops.import_ca(db, name="offline", cert_pem=cert_pem, key_pem=None)
+        assert not keyless.has_private_key
+        with pytest.raises(ValueError, match="no private key"):
+            ca_ops.create_ca(db, name="sub", dn={"CN": "Sub"}, ca_type=CAType.intermediate,
+                             key_type="ec", key_params="secp256r1", valid_days=365,
+                             parent=keyless)
