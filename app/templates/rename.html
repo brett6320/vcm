@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% from "_macros.html" import icon %}
+{% block content %}
+<p><a href="/connections/{{ conn.id }}">← {{ conn.name }}</a></p>
+<h1>Renamed: {{ old }} → {{ new }}</h1>
+<div class="alert notice">{{ icon('ok') }} The stored connection and its generated config now use
+  <strong>{{ new }}</strong>. Apply the commands below to rename it in place on the device.</div>
+
+<div class="card">
+  <h3>In-place rename commands ({{ site.vendor.label }})</h3>
+  <p class="muted">Run these on {{ site.name }} to rename the live objects without a full reload.</p>
+  <pre>{{ rename_syntax }}</pre>
+</div>
+
+<div class="card">
+  <h3>New generated configuration</h3>
+  <a class="btn small" href="/connections/{{ conn.id }}/config">Download</a>
+  <pre>{{ conn.generated_config }}</pre>
+</div>
+{% endblock %}
