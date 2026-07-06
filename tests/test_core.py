@@ -1005,3 +1005,90 @@ def test_delete_ca_leaf_no_cascade_needed():
         ca_ops.delete_ca(db, root)   # empty → no cascade required
         db.commit()
         assert db.get(CertAuthority, rid) is None
+
+
+def test_locked_ca_and_cert_block_deletion():
+    import pytest, datetime
+    from app.db import SessionLocal, init_db
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority, Certificate, utcnow
+    init_db()
+    with SessionLocal() as db:
+        db.query(Certificate).delete()
+        db.query(CertAuthority).delete()
+        db.commit()
+        root = ca_ops.create_ca(db, name="lroot", dn={"CN": "L Root"}, ca_type=CAType.root,
+                                key_type="ec", key_params="secp256r1", valid_days=3650)
+        sub = ca_ops.create_ca(db, name="lsub", dn={"CN": "L Sub"}, ca_type=CAType.issuing,
+                               key_type="ec", key_params="secp256r1", valid_days=1825,
+                               parent=root)
+        now = utcnow()
+        cert = Certificate(ca_id=sub.id, serial="LK01", subject_dn="CN=leaf", cert_pem="x",
+                           not_before=now, not_after=now + datetime.timedelta(days=1))
+        db.add(cert)
+        db.commit()
+
+        # A locked CA cannot be deleted.
+        root.locked = True
+        db.commit()
+        with pytest.raises(ValueError, match="locked"):
+            ca_ops.delete_ca(db, root, cascade=True)
+
+        # Unlock the CA, but a locked descendant cert still blocks a cascade.
+        root.locked = False
+        cert.locked = True
+        db.commit()
+        with pytest.raises(ValueError, match="locked certificate"):
+            ca_ops.delete_ca(db, root, cascade=True)
+
+        # Unlock everything → cascade succeeds.
+        cert.locked = False
+        db.commit()
+        summary = ca_ops.delete_ca(db, root, cascade=True)
+        db.commit()
+        assert summary["sub_cas"] == 1 and summary["certs"] == 1
+        assert db.query(CertAuthority).count() == 0
+
+
+def test_cert_lock_blocks_delete_route_two_step():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, Certificate, CAType, utcnow
+    from app.pki import ca as ca_ops
+    from app.security.passwords import hash_password
+    import pyotp, re, datetime
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="lk").first():
+                db.add(User(username="lk", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+            root = ca_ops.create_ca(db, name="lkroot", dn={"CN": "LK Root"},
+                                    ca_type=CAType.root, key_type="ec",
+                                    key_params="secp256r1", valid_days=3650)
+            now = utcnow()
+            cert = Certificate(ca_id=root.id, serial="C0FFEE", subject_dn="CN=leaf",
+                               cert_pem="-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----",
+                               not_before=now, not_after=now + datetime.timedelta(days=1))
+            db.add(cert)
+            db.commit()
+            cid = cert.id
+        c.post("/login", data={"username": "lk", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+
+        # Lock it (step-0). Delete with correct serial must now be refused.
+        c.post(f"/pki/cert/{cid}/lock", data={"locked": "1"})
+        r = c.post(f"/pki/cert/{cid}/delete", data={"confirm_serial": "C0FFEE"})
+        assert "locked" in r.text.lower()
+        with SessionLocal() as db:
+            assert db.get(Certificate, cid) is not None
+
+        # Step 1: unlock. Step 2: delete.
+        c.post(f"/pki/cert/{cid}/lock", data={"locked": ""})
+        r = c.post(f"/pki/cert/{cid}/delete", data={"confirm_serial": "C0FFEE"},
+                   follow_redirects=False)
+        assert r.status_code == 303
+        with SessionLocal() as db:
+            assert db.get(Certificate, cid) is None

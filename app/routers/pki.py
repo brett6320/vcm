@@ -102,6 +102,8 @@ def delete_ca(ca_id: int, request: Request, confirm_name: str = Form(""),
         return render(request, "pki.html", error=error, cas=cas, certs=certs,
                       ca_types=list(CAType), hierarchy=ca_ops.build_hierarchy(db))
 
+    if ca.locked:
+        return _back(f"CA '{ca.name}' is locked. Unlock it before deleting.")
     if confirm_name.strip() != ca.name:
         return _back("CA name confirmation did not match — nothing was deleted.")
     try:
@@ -110,6 +112,19 @@ def delete_ca(ca_id: int, request: Request, confirm_name: str = Form(""),
         return _back(str(e))
     audit(db, request, "pki.ca_delete",
           f"{summary['ca']} (+{summary['sub_cas']} sub-CA, {summary['certs']} certs)", user=user)
+    return RedirectResponse("/pki", status_code=303)
+
+
+@router.post("/ca/{ca_id}/lock")
+def lock_ca(ca_id: int, request: Request, locked: str = Form(""),
+            db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Toggle delete-protection on a CA (admin-only)."""
+    ca = db.get(CertAuthority, ca_id)
+    if not ca:
+        raise HTTPException(404, "Not found")
+    ca.locked = bool(locked)
+    db.flush()
+    audit(db, request, "pki.ca_lock" if ca.locked else "pki.ca_unlock", ca.name, user=user)
     return RedirectResponse("/pki", status_code=303)
 
 
@@ -180,12 +195,31 @@ def delete_cert(cert_id: int, request: Request, confirm_serial: str = Form(""),
     cert = db.get(Certificate, cert_id)
     if not cert:
         raise HTTPException(404, "Not found")
-    if confirm_serial.strip() != cert.serial:
+
+    def _back(error: str):
         fullchain = cert.cert_pem + "\n" + ca_ops.chain_pem(db, cert.ca)
-        return render(request, "cert.html", cert=cert, fullchain=fullchain,
-                      error="Serial confirmation did not match — nothing was deleted.")
+        return render(request, "cert.html", cert=cert, fullchain=fullchain, error=error)
+
+    if cert.locked:
+        return _back("This certificate is locked. Unlock it before deleting.")
+    if confirm_serial.strip() != cert.serial:
+        return _back("Serial confirmation did not match — nothing was deleted.")
     serial, subject = cert.serial, cert.subject_dn
     db.delete(cert)
     db.flush()
     audit(db, request, "pki.cert_delete", f"{serial}:{subject}", user=user)
     return RedirectResponse("/pki", status_code=303)
+
+
+@router.post("/cert/{cert_id}/lock")
+def lock_cert(cert_id: int, request: Request, locked: str = Form(""),
+              db: Session = Depends(get_db), user: User = Depends(require_admin)):
+    """Toggle delete-protection on an issued certificate (admin-only)."""
+    cert = db.get(Certificate, cert_id)
+    if not cert:
+        raise HTTPException(404, "Not found")
+    cert.locked = bool(locked)
+    db.flush()
+    audit(db, request, "pki.cert_lock" if cert.locked else "pki.cert_unlock",
+          cert.serial, user=user)
+    return RedirectResponse(f"/pki/cert/{cert.id}", status_code=303)

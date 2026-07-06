@@ -5,7 +5,8 @@
 <div class="card">
   <p><strong>Subject:</strong> {{ cert.subject_dn }}</p>
   <p><strong>SAN:</strong> {{ cert.san or '—' }}</p>
-  <p><strong>Status:</strong> {{ cert.status.value }} &nbsp;
+  <p><strong>Status:</strong> {{ cert.status.value }}
+     {% if cert.locked %}<span class="badge badge-issuing">🔒 locked</span>{% endif %} &nbsp;
      <strong>Valid:</strong> {{ cert.not_before.date() }} → {{ cert.not_after.date() }}</p>
   <a class="btn small" href="/pki/cert/{{ cert.id }}/pem?fmt=cert">Download cert</a>
   <a class="btn small" href="/pki/cert/{{ cert.id }}/pem?fmt=fullchain">Download full chain</a>
@@ -14,11 +15,33 @@
 
 {% if user and user.role.value == 'admin' %}
 <div class="card">
+  <h3>Delete protection</h3>
+  {% if cert.locked %}
+  <p class="muted">This certificate is <strong>locked</strong> and cannot be deleted.
+    Unlock it first (step 1), then delete (step 2).</p>
+  <form method="post" action="/pki/cert/{{ cert.id }}/lock">
+    <input type="hidden" name="locked" value="">
+    <button class="btn small">🔓 Unlock certificate</button>
+  </form>
+  {% else %}
+  <p class="muted">Lock this certificate to protect it from accidental deletion.
+    A locked certificate must be unlocked before it can be deleted.</p>
+  <form method="post" action="/pki/cert/{{ cert.id }}/lock">
+    <input type="hidden" name="locked" value="1">
+    <button class="btn small">🔒 Lock certificate</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card">
   <h3 style="color:var(--danger)">Danger zone — delete certificate</h3>
   <p class="muted">Permanently removes this issued certificate record. This cannot be
     undone. The certificate is <strong>not</strong> revoked on any device that already
     trusts it — deleting only removes it from this manager. To confirm, type the serial
     <code>{{ cert.serial }}</code> below.</p>
+  {% if cert.locked %}
+  <p class="alert error">Locked — unlock above before this certificate can be deleted.</p>
+  {% else %}
   <form method="post" action="/pki/cert/{{ cert.id }}/delete"
         onsubmit="return confirm('Permanently delete certificate {{ cert.serial }}? This cannot be undone.');">
     <label>Type the serial to confirm</label>
@@ -26,6 +49,7 @@
            style="max-width:24rem">
     <button class="btn danger" style="margin-top:.6rem">Delete certificate</button>
   </form>
+  {% endif %}
 </div>
 {% endif %}
 {% endblock %}

@@ -264,6 +264,8 @@ def delete_ca(db: Session, ca: CertAuthority, *, cascade: bool = False) -> dict:
     """Delete a CA. Refuses a CA that still has child CAs or issued certificates
     unless `cascade` is set, in which case the whole subtree (child CAs + their
     issued certs) is removed too. Returns a summary of what was deleted."""
+    if ca.locked:
+        raise ValueError(f"CA '{ca.name}' is locked — unlock it before deleting.")
     descendants = _descendant_cas(db, ca)
     subtree_ids = [ca.id] + [d.id for d in descendants]
     cert_count = db.execute(
@@ -276,6 +278,22 @@ def delete_ca(db: Session, ca: CertAuthority, *, cascade: bool = False) -> dict:
             f"CA '{ca.name}' still has {len(descendants)} sub-CA(s) and "
             f"{cert_count} issued certificate(s). Enable cascade to delete the "
             "whole subtree, or remove those first."
+        )
+
+    # Cascade must not silently blow past a lock deeper in the subtree.
+    locked_sub = [d.name for d in descendants if d.locked]
+    if locked_sub:
+        raise ValueError(
+            f"Cannot cascade: locked sub-CA(s) {', '.join(locked_sub)}. Unlock them first."
+        )
+    locked_certs = db.execute(
+        select(func.count()).select_from(Certificate)
+        .where(Certificate.ca_id.in_(subtree_ids), Certificate.locked.is_(True))
+    ).scalar_one()
+    if locked_certs:
+        raise ValueError(
+            f"Cannot cascade: {locked_certs} locked certificate(s) in the subtree. "
+            "Unlock them first."
         )
 
     # Delete issued certs in the subtree, then CAs deepest-first, then the CA.
@@ -327,7 +345,7 @@ def build_hierarchy(db: Session, *, include_pem: bool = False) -> list[dict]:
 
     def ca_node(ca: CertAuthority) -> dict:
         n = {"kind": "ca", "id": ca.id, "name": ca.name, "ca_type": ca.ca_type.value,
-             "subject": ca.subject_dn, "parent_id": ca.parent_id,
+             "subject": ca.subject_dn, "parent_id": ca.parent_id, "locked": ca.locked,
              "key": f"{ca.key_type}:{ca.key_params}", "path_len": ca.path_len,
              "not_before": ca.not_before.isoformat(), "not_after": ca.not_after.isoformat(),
              "cas": [ca_node(ch) for ch in ca_children.get(ca.id, [])],
