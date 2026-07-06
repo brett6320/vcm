@@ -1683,3 +1683,110 @@ def test_dashboard_shows_expiring_counts_and_supersede_excludes():
         assert "CN=warn" in page2          # still tracked
     finally:
         c.__exit__(None, None, None)
+
+
+def _login_mfa(c, username):
+    import pyotp, re
+    c.post("/login", data={"username": username, "password": "pw123456"})
+    sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+    c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+
+
+def _create_token_via_ui(c, name, scope):
+    import re
+    r = c.post("/profile/tokens/create", data={"name": name, "scope": scope})
+    m = re.search(r'class="token-plaintext[^>]*>(vcm_[A-Za-z0-9_\-]+)<', r.text)
+    assert m, r.text
+    return m.group(1)
+
+
+def test_api_token_issuance_stores_only_hash():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, ApiToken
+    from app.security.passwords import hash_password
+    from app.security.apitokens import hash_token
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="tokadm").first():
+                db.add(User(username="tokadm", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        _login_mfa(c, "tokadm")
+        plaintext = _create_token_via_ui(c, "ci-read", "read")
+        assert plaintext.startswith("vcm_")
+        # Only the hash + a non-secret prefix are stored — never the plaintext.
+        with SessionLocal() as db:
+            row = db.query(ApiToken).filter_by(token_hash=hash_token(plaintext)).one()
+            assert row.name == "ci-read" and row.prefix == plaintext[:12]
+            assert plaintext not in (row.token_hash, row.prefix)
+            assert row.token_hash != plaintext
+        # Plaintext is shown exactly once — not on a subsequent profile render.
+        assert plaintext not in c.get("/profile").text
+
+
+def test_api_bearer_auth_scope_and_lifecycle():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, ApiToken, TokenScope, utcnow
+    from app.security.passwords import hash_password
+    from app.security.apitokens import hash_token
+    import datetime
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="tokusr").first():
+                db.add(User(username="tokusr", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        _login_mfa(c, "tokusr")
+        read_tok = _create_token_via_ui(c, "reader", "read")
+        write_tok = _create_token_via_ui(c, "writer", "write")
+        admin_tok = _create_token_via_ui(c, "auditor", "admin")
+
+        with SessionLocal() as db:
+            uid = db.query(User).filter_by(username="tokusr").one().id
+            read_id = db.query(ApiToken).filter_by(token_hash=hash_token(read_tok)).one().id
+
+    RH = {"Authorization": f"Bearer {read_tok}"}
+    WH = {"Authorization": f"Bearer {write_tok}"}
+    AH = {"Authorization": f"Bearer {admin_tok}"}
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        # Valid read token authenticates GET endpoints.
+        r = c.get("/api/sites", headers=RH)
+        assert r.status_code == 200 and "sites" in r.json()
+        assert c.get("/api/whoami", headers=RH).json()["user"] == "tokusr"
+        assert "certificates" in c.get("/api/certificates", headers=RH).json()
+        assert "hierarchy" in c.get("/api/pki/tree", headers=RH).json()
+        # last_used_at recorded.
+        with SessionLocal() as db:
+            assert db.get(ApiToken, read_id).last_used_at is not None
+        # Missing / bad token -> JSON 401.
+        assert c.get("/api/sites").status_code == 401
+        bad = c.get("/api/sites", headers={"Authorization": "Bearer vcm_bogus"})
+        assert bad.status_code == 401 and "detail" in bad.json()
+        # Scope enforcement: read can't hit admin (audit) or write endpoints.
+        assert c.get("/api/audit", headers=RH).status_code == 403
+        assert c.post(f"/api/tokens/{read_id}/revoke", headers=RH).status_code == 403
+        # Admin scope reaches admin-only data; write scope reaches the write endpoint.
+        assert c.get("/api/audit", headers=AH).status_code == 200
+        r = c.post(f"/api/tokens/{read_id}/revoke", headers=WH)
+        assert r.status_code == 200 and r.json()["revoked"] is True
+        # The just-revoked token is now rejected.
+        assert c.get("/api/sites", headers=RH).status_code == 401
+
+        # Expired token -> 401.
+        exp_plain = "vcm_expired_secret_for_test"
+        with SessionLocal() as db:
+            db.add(ApiToken(user_id=uid, name="old", scope=TokenScope.read,
+                            token_hash=hash_token(exp_plain), prefix=exp_plain[:12],
+                            expires_at=utcnow() - datetime.timedelta(days=1)))
+            db.commit()
+        assert c.get("/api/sites",
+                     headers={"Authorization": f"Bearer {exp_plain}"}).status_code == 401
+
+    # A valid token is still rejected from a source IP outside the allowlist
+    # (empty allowlist => loopback-only fallback; 203.0.113.7 is not loopback).
+    with TestClient(app, client=("203.0.113.7", 1)) as c2:
+        assert c2.get("/api/sites", headers=AH).status_code == 403
