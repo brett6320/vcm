@@ -75,6 +75,23 @@ def test_rename_syntax_per_vendor():
     assert "vpn-new" in generators.generate(p) and "vpn-old" not in generators.generate(p)
 
 
+def test_vendor_options_use_platform_terminology():
+    from app.srx import proposals
+    fort = proposals.vendor_options("fortinet")
+    enc_labels = {o["label"]: o["value"] for o in fort["encryption"]}
+    assert enc_labels.get("aes256") == "aes-256-cbc"       # Fortinet's own keyword
+    assert enc_labels.get("aes256gcm") == "aes-256-gcm"
+    # Only supported algos are offered — Cradlepoint has no 'des' mapping
+    crad = {o["value"] for o in proposals.vendor_options("cradlepoint")["encryption"]}
+    assert "des" not in crad
+    palo = proposals.vendor_options("palo_alto")
+    pl = {o["label"]: o["value"] for o in palo["dh_groups"]}
+    assert pl.get("group20") == "20"
+    mt = proposals.vendor_options("mikrotik")
+    ml = {o["label"] for o in mt["dh_groups"]}
+    assert "ecp384" in ml  # MikroTik terminology
+
+
 def test_all_vendors_generate():
     for v in ("juniper_srx", "digi", "cradlepoint", "pfsense", "fortinet",
               "palo_alto", "cisco_firepower", "strongswan", "mikrotik"):
