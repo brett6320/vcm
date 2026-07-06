@@ -69,11 +69,17 @@ def create_ca(
         raise ValueError("Intermediate/issuing CA requires a parent CA")
     if ca_type == CAType.root and parent is not None:
         raise ValueError("Root CA cannot have a parent")
-    if parent is not None and not parent.key_enc:
+    if parent is not None and parent.pending:
         raise ValueError(
-            f"Parent CA '{parent.name}' has no private key available to sign — "
-            "it was imported cert-only. Import its key or choose another parent."
+            f"Parent CA '{parent.name}' is still pending its own signed certificate."
         )
+
+    # Parent exists but its signing key is offline (cert-only import): we can't
+    # sign locally. Generate the new CA's key + a CSR and park it as *pending*
+    # until an externally-signed certificate is uploaded.
+    if parent is not None and not parent.key_enc:
+        return _create_pending_ca(db, name=name, dn=dn, ca_type=ca_type, key_type=key_type,
+                                  key_params=key_params, parent=parent, path_len=path_len)
 
     key = keys.generate_key(key_type, key_params)
     subject = _name_from_dn(dn)
@@ -137,6 +143,110 @@ def create_ca(
     db.add(ca)
     db.flush()
     return ca
+
+
+def _create_pending_ca(db, *, name, dn, ca_type, key_type, key_params, parent, path_len):
+    """Generate the new CA's keypair + a CSR (signed by its own key), and store
+    it as pending. The CSR is meant to be signed by `parent`'s offline key; the
+    resulting cert is uploaded later via complete_pending_ca()."""
+    key = keys.generate_key(key_type, key_params)
+    subject = _name_from_dn(dn)
+    if path_len is None:
+        path_len = 0 if ca_type == CAType.issuing else None
+
+    csr = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(subject)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=path_len), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True, key_cert_sign=True, crl_sign=True,
+                content_commitment=False, key_encipherment=False, data_encipherment=False,
+                key_agreement=False, encipher_only=False, decipher_only=False,
+            ),
+            critical=True,
+        )
+        .sign(key, _hash_for(key))
+    )
+    now = utcnow()
+    ca = CertAuthority(
+        name=name,
+        ca_type=ca_type,
+        parent_id=parent.id,
+        subject_dn=dn_to_str(subject),
+        cert_pem="",                       # no signed cert yet
+        key_enc=keys.wrap_private_key(key),
+        key_type=key_type,
+        key_params=key_params,
+        not_before=now,
+        not_after=now,                     # placeholder until the cert is uploaded
+        path_len=path_len,
+        pending=True,
+        csr_pem=csr.public_bytes(serialization_encoding()).decode(),
+    )
+    db.add(ca)
+    db.flush()
+    return ca
+
+
+def complete_pending_ca(db: Session, ca: CertAuthority, cert_pem: str) -> CertAuthority:
+    """Attach an externally-signed certificate to a pending CA. Validates that
+    the cert's public key matches the CA's generated key and that it is a CA
+    cert, then clears the pending state so it becomes usable."""
+    if not ca.pending:
+        raise ValueError(f"CA '{ca.name}' is not pending a certificate.")
+    try:
+        cert = x509.load_pem_x509_certificate(cert_pem.encode())
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"Not a valid PEM certificate: {e}") from e
+
+    # The uploaded cert must certify *our* key.
+    our_pub = keys.unwrap_private_key(ca.key_enc).public_key().public_bytes(
+        _pub_enc(), _pub_fmt())
+    cert_pub = cert.public_key().public_bytes(_pub_enc(), _pub_fmt())
+    if our_pub != cert_pub:
+        raise ValueError(
+            "Uploaded certificate's public key does not match this CA's key — "
+            "it was not issued from the generated CSR."
+        )
+
+    # Must be a CA certificate.
+    try:
+        bc = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+        if not bc.ca:
+            raise ValueError("Uploaded certificate is not a CA certificate (CA:FALSE).")
+        path_len = bc.path_length
+    except x509.ExtensionNotFound:
+        raise ValueError("Uploaded certificate lacks Basic Constraints (not a CA cert).")
+
+    # Best-effort: warn if it doesn't chain to the recorded parent by issuer name.
+    parent = db.get(CertAuthority, ca.parent_id) if ca.parent_id else None
+    if parent and parent.cert_pem:
+        parent_subj = x509.load_pem_x509_certificate(parent.cert_pem.encode()).subject
+        if cert.issuer != parent_subj:
+            raise ValueError(
+                "Uploaded certificate issuer does not match the recorded parent CA."
+            )
+
+    ca.cert_pem = cert.public_bytes(serialization_encoding()).decode()
+    ca.subject_dn = dn_to_str(cert.subject)
+    ca.not_before = _aware(cert.not_valid_before_utc)
+    ca.not_after = _aware(cert.not_valid_after_utc)
+    ca.path_len = path_len
+    ca.pending = False
+    ca.csr_pem = None
+    db.flush()
+    return ca
+
+
+def _pub_enc():
+    from cryptography.hazmat.primitives.serialization import Encoding
+    return Encoding.DER
+
+
+def _pub_fmt():
+    from cryptography.hazmat.primitives.serialization import PublicFormat
+    return PublicFormat.SubjectPublicKeyInfo
 
 
 def serialization_encoding():
@@ -346,6 +456,7 @@ def build_hierarchy(db: Session, *, include_pem: bool = False) -> list[dict]:
     def ca_node(ca: CertAuthority) -> dict:
         n = {"kind": "ca", "id": ca.id, "name": ca.name, "ca_type": ca.ca_type.value,
              "subject": ca.subject_dn, "parent_id": ca.parent_id, "locked": ca.locked,
+             "pending": ca.pending, "has_key": bool(ca.key_enc),
              "key": f"{ca.key_type}:{ca.key_params}", "path_len": ca.path_len,
              "not_before": ca.not_before.isoformat(), "not_after": ca.not_after.isoformat(),
              "cas": [ca_node(ch) for ch in ca_children.get(ca.id, [])],

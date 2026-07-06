@@ -5,36 +5,44 @@
 <li>
   <div class="tree-ca">
     <span class="badge badge-{{ n.ca_type }}">{{ n.ca_type }}</span>
-    <strong>{{ n.name }}</strong>
+    <strong><a href="/pki/ca/{{ n.id }}">{{ n.name }}</a></strong>
     <span class="muted">{{ n.subject }}</span>
+    {% if n.pending %}
+    <span class="badge badge-intermediate">⏳ pending signature</span>
+    <a class="tree-link" href="/pki/ca/{{ n.id }}">complete →</a>
+    {% else %}
     <span class="muted">· {{ n.key }}{% if n.path_len is not none %} · pathlen:{{ n.path_len }}{% endif %}
       · exp {{ n.not_after[:10] }}</span>
-    {% if n.locked %}<span class="badge badge-issuing">🔒 locked</span>{% endif %}
     <a class="tree-link" href="/pki/ca/{{ n.id }}/cert">cert</a>
     <a class="tree-link" href="/pki/ca/{{ n.id }}/chain">chain</a>
-    {% if admin %}
-    {% if n.locked %}
-    <form method="post" action="/pki/ca/{{ n.id }}/lock" style="display:inline">
-      <input type="hidden" name="locked" value="">
-      <button class="btn small">🔓 unlock</button>
-    </form>
-    {% else %}
-    <form method="post" action="/pki/ca/{{ n.id }}/lock" style="display:inline">
-      <input type="hidden" name="locked" value="1">
-      <button class="btn small">🔒 lock</button>
-    </form>
-    <details class="ca-del">
-      <summary class="tree-link danger-link">delete</summary>
-      <form method="post" action="/pki/ca/{{ n.id }}/delete" class="ca-del-form"
-            onsubmit="return confirm('Permanently delete CA {{ n.name }} and its private key? This cannot be undone.');">
-        <span class="muted">Type <code>{{ n.name }}</code> to confirm.</span>
-        <input name="confirm_name" autocomplete="off" placeholder="{{ n.name }}" required>
-        <label class="inline"><input type="checkbox" name="cascade" value="1" style="width:auto">
-          Also delete all sub-CAs and issued certificates under it</label>
-        <button class="btn small danger">Delete CA</button>
-      </form>
-    </details>
     {% endif %}
+    {% if admin %}
+    <details class="ca-actions">
+      <summary class="status-chip {{ 'locked' if n.locked else 'unlocked' }}">
+        {{ '🔒 locked' if n.locked else '🔓 unlocked' }}</summary>
+      <div class="ca-actions-menu">
+        {% if n.locked %}
+        <form method="post" action="/pki/ca/{{ n.id }}/lock">
+          <input type="hidden" name="locked" value="">
+          <button class="btn small">🔓 Unlock</button>
+        </form>
+        <p class="muted">Unlock to enable deletion.</p>
+        {% else %}
+        <form method="post" action="/pki/ca/{{ n.id }}/lock">
+          <input type="hidden" name="locked" value="1">
+          <button class="btn small">🔒 Lock</button>
+        </form>
+        <form method="post" action="/pki/ca/{{ n.id }}/delete" class="ca-del-form"
+              onsubmit="return confirm('Permanently delete CA {{ n.name }} and its private key? This cannot be undone.');">
+          <span class="muted">Type <code>{{ n.name }}</code> to confirm deletion.</span>
+          <input name="confirm_name" autocomplete="off" placeholder="{{ n.name }}" required>
+          <label class="inline"><input type="checkbox" name="cascade" value="1" style="width:auto">
+            Also delete all sub-CAs and issued certificates under it</label>
+          <button class="btn small danger">Delete CA</button>
+        </form>
+        {% endif %}
+      </div>
+    </details>
     {% endif %}
   </div>
   {% if n.cas or n.certificates %}
@@ -88,16 +96,35 @@
     <div class="row3">
       <div><label>Parent CA (blank = root)</label>
         <select name="parent_id"><option value="">— none (root) —</option>
-        {% for c in cas if c.has_private_key %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}</select>
-        <span class="muted" style="font-size:.75rem">Only CAs with an available private key can sign.</span>
+        {% for c in cas if not c.pending %}<option value="{{ c.id }}">{{ c.name }}{% if not c.has_private_key %} — no key (generates CSR){% endif %}</option>{% endfor %}</select>
+        <span class="muted" style="font-size:.75rem">Cert-only parents (offline key) produce a CSR to sign externally.</span>
       </div>
-      <div><label>Key type</label><select name="key_type">
-        <option value="ec">EC</option><option value="rsa">RSA</option></select></div>
-      <div><label>Key params (curve/bits)</label><input name="key_params" value="secp384r1"></div>
+      <div><label>Key type</label><select name="key_type" id="ca-key-type">
+        <option value="rsa" selected>RSA</option><option value="ec">EC</option></select></div>
+      <div><label>Key params (curve/bits)</label>
+        <input name="key_params" id="ca-key-params" value="4096"></div>
     </div>
+    <div id="ca-key-warning" class="alert error" style="display:none"></div>
     <label>Valid days</label><input name="valid_days" value="3650">
     <button class="btn" style="margin-top:.8rem">Create CA</button>
   </form>
+  <script>
+  (function () {
+    var t = document.getElementById('ca-key-type'),
+        p = document.getElementById('ca-key-params'),
+        w = document.getElementById('ca-key-warning');
+    function check() {
+      var msg = '';
+      if (t.value === 'rsa') {
+        var bits = parseInt(p.value, 10);
+        if (bits <= 1024) msg = '⚠ RSA-1024 is broken and must not be used for a CA. Use 4096.';
+        else if (bits <= 2048) msg = '⚠ RSA-2048 is below the recommended strength for a CA. Prefer RSA-4096.';
+      }
+      w.textContent = msg; w.style.display = msg ? 'block' : 'none';
+    }
+    t.addEventListener('change', check); p.addEventListener('input', check); check();
+  })();
+  </script>
   <p class="muted">CA private keys are AES-256-GCM encrypted at rest and never exported.</p>
 </div>
 
@@ -132,13 +159,15 @@
 
 <div class="card">
   <h3>Sign appliance CSR</h3>
-  <form method="post" action="/pki/sign">
+  <form method="post" action="/pki/sign" enctype="multipart/form-data">
     <label>Issuing CA</label>
     <select name="issuing_ca_id" required>
-      {% for c in cas if c.ca_type.value != 'root' and c.has_private_key %}
+      {% for c in cas if c.ca_type.value != 'root' and c.can_sign %}
       <option value="{{ c.id }}">{{ c.name }} ({{ c.ca_type.value }})</option>{% endfor %}
     </select>
-    <label>CSR (PEM)</label>
+    <label>Upload CSR file <span class="muted">— .csr/.pem (overrides pasted CSR)</span></label>
+    <input type="file" name="csr_file" accept=".csr,.pem,.req,.p10">
+    <label>…or paste CSR (PEM)</label>
     <textarea name="csr_pem" placeholder="-----BEGIN CERTIFICATE REQUEST-----"></textarea>
     <div class="row">
       <div><label>SAN DNS (comma-separated)</label><input name="san_dns"></div>

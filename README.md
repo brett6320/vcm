@@ -20,19 +20,35 @@ IPSec VPN configurations for **Juniper SRX (200–300 series)**, **Digi**,
   - Multi-level CA hierarchy: **root → intermediate(s) → issuing** CA.
   - Stores CA certs (public) + private keys **AES-256-GCM encrypted at rest**.
   - **CA private keys are never exported** through any API — signing only.
-  - Accepts **CSRs** and issues appliance (end-entity) certificates.
+  - **Create CAs** (RSA default, **4096-bit**; RSA-2048/1024 flagged with a
+    prominent security warning) or **import** existing ones from **PEM** or
+    **PKCS#12 (.p12/.pfx)**, with optional password.
+  - **Offline-key (cert-only) parents**: creating a CA under a parent whose
+    signing key is offline generates a **CSR** — download it, have it signed
+    externally, then upload the signed cert to activate the CA (validated
+    against the generated key, CA basic-constraints, and parent issuer).
+  - Accepts **CSRs** (paste or file upload) and issues appliance certificates.
   - Download cert / full chain (PEM).
+  - **Delete protection**: certificates and CAs can be **locked** (CAs are
+    **locked by default**); deletion is a deliberate two-step unlock-then-delete
+    and requires re-typing the serial/name. CA deletion supports cascade.
 - **VPN config generation**
   - Builds connection profiles across all available **IKE/IPSec proposals**.
   - **Warns on insecure protocol use** (DES/3DES/MD5/SHA1/weak DH/IKEv1/PSK),
     with severity ratings; annotated inline in generated config.
   - App-wide **defaults** for all parameters (editable, applied to new sites).
-  - Per-vendor generators: Juniper SRX (set-style), Digi, Cradlepoint (NCOS),
-    pfSense (swanctl.conf / strongSwan).
+  - Per-vendor generators/importers: **Juniper SRX**, **Digi**, **Cradlepoint**
+    (NCOS), **pfSense** (incl. `config.xml` backup import), **Cisco Firepower**,
+    **Fortinet**, **Palo Alto**, **strongSwan**, **MikroTik**, plus import-only
+    **AWS** and **Azure** VPN gateway configs.
+  - Route-based (VTI) and policy-based peers, proxy-identity / traffic-selectors
+    chosen per platform pair; optional tunnel interface + addressing input.
   - **Both-sides generation**: mirror crypto to produce a guaranteed-compatible
-    far-end config (update existing firewall + new firewall config).
-  - **Import** existing configs to seed the "existing site" database, then
-    generate a compatible peer.
+    far-end config; edit/rename connections with per-vendor in-place syntax.
+  - **Import** existing configs (paste or file upload) to seed the site database.
+  - **Inference (suggest-then-confirm)**: detects likely peer connections and
+    BGP peering between connected sites; nothing is linked/applied without
+    explicit confirmation.
 - **UI**: light / dark / **system (default)** theme.
 - **Packaging**: Docker image + compose, ready behind Cloudflare Tunnel,
   Traefik, or NGINX.

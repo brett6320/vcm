@@ -931,17 +931,17 @@ def test_load_material_p12_and_pem():
     assert c3.startswith("-----BEGIN CERTIFICATE") and k3 is None
 
 
-def test_create_ca_under_keyless_parent_errors_cleanly():
-    # Importing a root cert-only (no key), then creating a child under it must
-    # raise a clear error — not blow up decrypting an empty key blob.
-    import pytest
-    from app.db import SessionLocal
+def test_create_ca_under_keyless_parent_generates_csr():
+    # A cert-only (offline-key) parent can't sign locally, so creating a child
+    # under it yields a *pending* CA with a CSR to be signed externally.
+    from cryptography import x509
+    from app.db import SessionLocal, init_db
     from app.pki import ca as ca_ops
     from app.models import CAType, CertAuthority
+    init_db()
     with SessionLocal() as db:
         db.query(CertAuthority).delete()
         db.commit()
-        # Build a self-signed root and import it WITHOUT its key.
         root = ca_ops.create_ca(db, name="realroot", dn={"CN": "Real Root"},
                                 ca_type=CAType.root, key_type="ec",
                                 key_params="secp256r1", valid_days=3650)
@@ -950,10 +950,16 @@ def test_create_ca_under_keyless_parent_errors_cleanly():
         db.commit()
         keyless = ca_ops.import_ca(db, name="offline", cert_pem=cert_pem, key_pem=None)
         assert not keyless.has_private_key
-        with pytest.raises(ValueError, match="no private key"):
-            ca_ops.create_ca(db, name="sub", dn={"CN": "Sub"}, ca_type=CAType.intermediate,
-                             key_type="ec", key_params="secp256r1", valid_days=365,
-                             parent=keyless)
+        sub = ca_ops.create_ca(db, name="sub", dn={"CN": "Sub"}, ca_type=CAType.intermediate,
+                               key_type="ec", key_params="secp256r1", valid_days=365,
+                               parent=keyless)
+        assert sub.pending and sub.csr_pem and sub.cert_pem == ""
+        assert not sub.can_sign
+        # The CSR is valid and CA-requesting.
+        csr = x509.load_pem_x509_csr(sub.csr_pem.encode())
+        assert csr.is_signature_valid
+        bc = csr.extensions.get_extension_for_class(x509.BasicConstraints).value
+        assert bc.ca is True
 
 
 def test_delete_ca_refuses_nonempty_and_cascades():
@@ -971,6 +977,7 @@ def test_delete_ca_refuses_nonempty_and_cascades():
         sub = ca_ops.create_ca(db, name="tsub", dn={"CN": "T Sub"},
                                ca_type=CAType.issuing, key_type="ec",
                                key_params="secp256r1", valid_days=1825, parent=root)
+        root.locked = False; sub.locked = False   # CAs are locked by default
         now = utcnow()
         db.add(Certificate(ca_id=sub.id, serial="AA01", subject_dn="CN=leaf",
                            cert_pem="x", not_before=now,
@@ -1001,6 +1008,8 @@ def test_delete_ca_leaf_no_cascade_needed():
         db.commit()
         root = ca_ops.create_ca(db, name="lonely", dn={"CN": "Lonely"}, ca_type=CAType.root,
                                 key_type="ec", key_params="secp256r1", valid_days=3650)
+        root.locked = False   # CAs are locked by default; unlock to delete
+        db.commit()
         rid = root.id
         ca_ops.delete_ca(db, root)   # empty → no cascade required
         db.commit()
@@ -1022,6 +1031,7 @@ def test_locked_ca_and_cert_block_deletion():
         sub = ca_ops.create_ca(db, name="lsub", dn={"CN": "L Sub"}, ca_type=CAType.issuing,
                                key_type="ec", key_params="secp256r1", valid_days=1825,
                                parent=root)
+        sub.locked = False   # isolate the lock behaviour under test (CAs default locked)
         now = utcnow()
         cert = Certificate(ca_id=sub.id, serial="LK01", subject_dn="CN=leaf", cert_pem="x",
                            not_before=now, not_after=now + datetime.timedelta(days=1))
@@ -1092,3 +1102,67 @@ def test_cert_lock_blocks_delete_route_two_step():
         assert r.status_code == 303
         with SessionLocal() as db:
             assert db.get(Certificate, cid) is None
+
+
+def _sign_ca_csr(csr, issuer_key, issuer_cert):
+    # Test helper: emulate the parent's offline signer turning a CA CSR into a cert.
+    import datetime
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    return (x509.CertificateBuilder()
+            .subject_name(csr.subject).issuer_name(issuer_cert.subject)
+            .public_key(csr.public_key()).serial_number(4242)
+            .not_valid_before(datetime.datetime(2024, 1, 1))
+            .not_valid_after(datetime.datetime(2030, 1, 1))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .sign(issuer_key, hashes.SHA256()))
+
+
+def test_pending_ca_complete_with_signed_cert():
+    import datetime, pytest
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from app.db import SessionLocal, init_db
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority, Certificate
+    init_db()
+    with SessionLocal() as db:
+        db.query(Certificate).delete()
+        db.query(CertAuthority).delete()
+        db.commit()
+        # Offline parent: build its key+cert externally, import cert-only.
+        pkey = ec.generate_private_key(ec.SECP256R1())
+        pname = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Offline Root")])
+        pcert = (x509.CertificateBuilder().subject_name(pname).issuer_name(pname)
+                 .public_key(pkey.public_key()).serial_number(1)
+                 .not_valid_before(datetime.datetime(2024, 1, 1))
+                 .not_valid_after(datetime.datetime(2034, 1, 1))
+                 .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+                 .sign(pkey, hashes.SHA256()))
+        parent = ca_ops.import_ca(
+            db, name="offline-root",
+            cert_pem=pcert.public_bytes(serialization.Encoding.PEM).decode(), key_pem=None)
+
+        sub = ca_ops.create_ca(db, name="pend-sub", dn={"CN": "Pend Sub"},
+                               ca_type=CAType.issuing, key_type="ec",
+                               key_params="secp256r1", valid_days=365, parent=parent)
+        assert sub.pending
+
+        # Wrong cert (different key) is rejected.
+        wrong = _sign_ca_csr(x509.load_pem_x509_csr(sub.csr_pem.encode()), pkey, pcert)
+        badkey = ec.generate_private_key(ec.SECP256R1())
+        bad_csr = (x509.CertificateSigningRequestBuilder()
+                   .subject_name(pname)
+                   .add_extension(x509.BasicConstraints(ca=True, path_length=0), True)
+                   .sign(badkey, hashes.SHA256()))
+        bad_cert = _sign_ca_csr(bad_csr, pkey, pcert)
+        with pytest.raises(ValueError, match="public key does not match"):
+            ca_ops.complete_pending_ca(db, sub, bad_cert.public_bytes(
+                serialization.Encoding.PEM).decode())
+
+        # Correct signed cert completes the CA.
+        ca_ops.complete_pending_ca(db, sub, wrong.public_bytes(
+            serialization.Encoding.PEM).decode())
+        assert not sub.pending and sub.csr_pem is None and sub.can_sign
