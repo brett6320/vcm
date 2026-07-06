@@ -83,25 +83,59 @@ def ca_csr(ca_id: int, db: Session = Depends(get_db), user: User = Depends(curre
 @router.post("/ca/{ca_id}/complete")
 async def complete_ca(ca_id: int, request: Request, cert_pem: str = Form(""),
                       cert_file: UploadFile | None = File(None),
+                      allow_non_ca: str = Form(""),
                       db: Session = Depends(get_db), user: User = Depends(require_admin)):
     """Upload the externally-signed certificate for a pending CA."""
     ca = db.get(CertAuthority, ca_id)
     if not ca:
         raise HTTPException(404, "Not found")
     try:
+        # This flow only ever expects a certificate (PEM or DER) — never a key
+        # or a PKCS#12 bundle — so decode it directly rather than sniffing p12.
         if cert_file is not None and cert_file.filename:
-            data = await cert_file.read()
-            up_cert, _ = material.load_material(cert_file.filename, data, None)
-            cert_pem = up_cert
+            cert_pem = material.load_cert(await cert_file.read())
         if not cert_pem.strip():
             raise ValueError("Provide the signed certificate (paste PEM or upload a file)")
-        ca_ops.complete_pending_ca(db, ca, cert_pem)
+        ca_ops.complete_pending_ca(db, ca, cert_pem, allow_non_ca=bool(allow_non_ca))
     except (ValueError, TypeError) as e:
         parent = db.get(CertAuthority, ca.parent_id) if ca.parent_id else None
         return render(request, "ca_detail.html", ca=ca, parent=parent, chain=None,
                       error=f"Could not complete CA: {e}")
     audit(db, request, "pki.ca_completed", ca.name, user=user)
     return RedirectResponse(f"/pki/ca/{ca.id}", status_code=303)
+
+
+@router.post("/ca/{ca_id}/new-csr")
+def regenerate_csr(ca_id: int, request: Request, db: Session = Depends(get_db),
+                   user: User = Depends(require_admin)):
+    """Generate a fresh key + CSR for a pending CA, reusing its create data."""
+    ca = db.get(CertAuthority, ca_id)
+    if not ca:
+        raise HTTPException(404, "Not found")
+    try:
+        ca_ops.regenerate_pending_csr(db, ca)
+    except ValueError as e:
+        parent = db.get(CertAuthority, ca.parent_id) if ca.parent_id else None
+        return render(request, "ca_detail.html", ca=ca, parent=parent, chain=None, error=str(e))
+    audit(db, request, "pki.ca_csr_regenerated", ca.name, user=user)
+    return RedirectResponse(f"/pki/ca/{ca.id}", status_code=303)
+
+
+@router.post("/ca/{ca_id}/discard")
+def discard_pending_ca(ca_id: int, request: Request, db: Session = Depends(get_db),
+                       user: User = Depends(require_admin)):
+    """Delete an incomplete (pending) CA. Allowed without the usual unlock/name
+    gate since a pending CA is never usable and has no dependents."""
+    ca = db.get(CertAuthority, ca_id)
+    if not ca:
+        raise HTTPException(404, "Not found")
+    if not ca.pending:
+        raise HTTPException(409, "Only pending CAs can be discarded here")
+    name = ca.name
+    db.delete(ca)
+    db.flush()
+    audit(db, request, "pki.ca_discarded", name, user=user)
+    return RedirectResponse("/pki", status_code=303)
 
 
 @router.post("/ca/import")

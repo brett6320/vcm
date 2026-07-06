@@ -28,11 +28,26 @@ def _cert_to_pem(cert: x509.Certificate) -> str:
 
 
 def looks_like_p12(filename: str, data: bytes) -> bool:
-    """PKCS#12 is DER (binary); PEM starts with an ASCII armor line."""
+    """PKCS#12 is DER (binary); PEM contains an ASCII armor line. We look for the
+    armor *anywhere* in the file so a BOM or leading text (e.g. openssl's
+    'Bag Attributes' dump) doesn't get mistaken for binary PKCS#12."""
     name = (filename or "").lower()
     if name.endswith((".p12", ".pfx")):
         return True
-    return not data.lstrip().startswith(b"-----BEGIN")
+    if name.endswith((".pem", ".crt", ".cer", ".key")):
+        return False
+    return b"-----BEGIN" not in data
+
+
+def load_cert(data: bytes) -> str:
+    """Parse a single certificate (PEM or DER) and return it as PEM. For flows
+    that only ever expect a certificate — never a key or a PKCS#12 bundle."""
+    if b"-----BEGIN" in data:
+        return _cert_to_pem(x509.load_pem_x509_certificate(data))
+    try:
+        return _cert_to_pem(x509.load_der_x509_certificate(data))
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"Not a valid PEM or DER certificate: {e}") from e
 
 
 def load_pkcs12(data: bytes, password: str | None) -> tuple[str, str | None]:

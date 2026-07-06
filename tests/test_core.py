@@ -1273,3 +1273,113 @@ def test_reimport_offers_update_then_updates():
         assert r.status_code == 303
         with SessionLocal() as db:
             assert db.query(Site).count() == n_sites + 1
+
+
+def test_load_cert_pem_der_and_leading_text():
+    import datetime
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from app.pki import material
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    nm = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Leaf")])
+    cert = (x509.CertificateBuilder().subject_name(nm).issuer_name(nm)
+            .public_key(key.public_key()).serial_number(7)
+            .not_valid_before(datetime.datetime(2024, 1, 1))
+            .not_valid_after(datetime.datetime(2030, 1, 1))
+            .sign(key, hashes.SHA256()))
+    pem = cert.public_bytes(serialization.Encoding.PEM)
+    der = cert.public_bytes(serialization.Encoding.DER)
+
+    assert material.load_cert(pem).startswith("-----BEGIN CERTIFICATE")
+    assert material.load_cert(der).startswith("-----BEGIN CERTIFICATE")
+    # PEM with a leading text dump (openssl 'Bag Attributes' style) is still PEM.
+    noisy = b"Bag Attributes: none\nsubject=CN=Leaf\n" + pem
+    assert not material.looks_like_p12("cert.pem", noisy)
+    assert material.load_cert(noisy).startswith("-----BEGIN CERTIFICATE")
+    # A .pem name is never treated as p12 even with odd bytes.
+    assert not material.looks_like_p12("x.pem", b"\xef\xbb\xbf-----BEGIN CERTIFICATE-----")
+
+
+def test_complete_pending_ca_allow_non_ca_override():
+    import datetime, pytest
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from app.db import SessionLocal, init_db
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority, Certificate
+    init_db()
+    with SessionLocal() as db:
+        db.query(Certificate).delete()
+        db.query(CertAuthority).delete()
+        db.commit()
+        pkey = ec.generate_private_key(ec.SECP256R1())
+        pname = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Off Root")])
+        pcert = (x509.CertificateBuilder().subject_name(pname).issuer_name(pname)
+                 .public_key(pkey.public_key()).serial_number(1)
+                 .not_valid_before(datetime.datetime(2024, 1, 1))
+                 .not_valid_after(datetime.datetime(2034, 1, 1))
+                 .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+                 .sign(pkey, hashes.SHA256()))
+        parent = ca_ops.import_ca(db, name="offroot",
+                                  cert_pem=pcert.public_bytes(serialization.Encoding.PEM).decode(),
+                                  key_pem=None)
+        sub = ca_ops.create_ca(db, name="pend", dn={"CN": "Pend"}, ca_type=CAType.issuing,
+                               key_type="ec", key_params="secp256r1", valid_days=365,
+                               parent=parent)
+        csr = x509.load_pem_x509_csr(sub.csr_pem.encode())
+        # Sign WITHOUT BasicConstraints (a common signer mistake).
+        noca = (x509.CertificateBuilder().subject_name(csr.subject).issuer_name(pcert.subject)
+                .public_key(csr.public_key()).serial_number(99)
+                .not_valid_before(datetime.datetime(2024, 1, 1))
+                .not_valid_after(datetime.datetime(2030, 1, 1))
+                .sign(pkey, hashes.SHA256()))
+        pem = noca.public_bytes(serialization.Encoding.PEM).decode()
+
+        with pytest.raises(ValueError, match="Basic Constraints"):
+            ca_ops.complete_pending_ca(db, sub, pem)
+        assert sub.pending
+        # Override accepts it.
+        ca_ops.complete_pending_ca(db, sub, pem, allow_non_ca=True)
+        assert not sub.pending and sub.can_sign
+
+
+def test_pending_ca_regenerate_csr_and_discard():
+    from app.db import SessionLocal, init_db
+    from app.pki import ca as ca_ops
+    from app.models import CAType, CertAuthority, Certificate
+    from cryptography import x509
+    import datetime
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    init_db()
+    with SessionLocal() as db:
+        db.query(Certificate).delete()
+        db.query(CertAuthority).delete()
+        db.commit()
+        pkey = ec.generate_private_key(ec.SECP256R1())
+        pn = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "R")])
+        pc = (x509.CertificateBuilder().subject_name(pn).issuer_name(pn)
+              .public_key(pkey.public_key()).serial_number(1)
+              .not_valid_before(datetime.datetime(2024, 1, 1))
+              .not_valid_after(datetime.datetime(2034, 1, 1))
+              .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
+              .sign(pkey, hashes.SHA256()))
+        parent = ca_ops.import_ca(db, name="r", cert_pem=pc.public_bytes(
+            serialization.Encoding.PEM).decode(), key_pem=None)
+        sub = ca_ops.create_ca(db, name="p", dn={"CN": "P"}, ca_type=CAType.issuing,
+                               key_type="ec", key_params="secp256r1", valid_days=1, parent=parent)
+        old_csr, old_key = sub.csr_pem, sub.key_enc
+        ca_ops.regenerate_pending_csr(db, sub)
+        assert sub.csr_pem != old_csr and sub.key_enc != old_key and sub.pending
+        # subject preserved
+        assert "CN=P" in x509.load_pem_x509_csr(sub.csr_pem.encode()).subject.rfc4514_string()
+        # discard removes it
+        sid = sub.id
+        db.delete(sub); db.flush()
+        assert db.get(CertAuthority, sid) is None
