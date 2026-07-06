@@ -822,6 +822,34 @@ def test_pki_hierarchy_and_csr_sign():
         assert not hasattr(cert, "key_pem")
 
 
+def test_infer_bgp_mirrors_pair():
+    from app.srx import suggest
+    from app.srx.model import Bgp
+    near = _mk_profile()
+    near.tunnel_ip = "169.254.10.1/30"
+    peer = _mk_profile()
+    peer.tunnel_ip = "169.254.10.2/30"
+    peer.bgp = Bgp(enabled=True, local_as="65002", peer_as="65001")
+
+    b = suggest.infer_bgp(near, peer)
+    assert b.enabled
+    assert b.local_as == "65001" and b.peer_as == "65002"
+    assert b.local_ip == "169.254.10.1" and b.peer_ip == "169.254.10.2"
+    assert b.networks == ["10.1.0.0/24"]
+
+    # Peer side mirrors.
+    b2 = suggest.infer_bgp(peer, near)
+    assert b2.local_as == "65002" and b2.peer_as == "65001"
+    assert b2.peer_ip == "169.254.10.1"
+
+
+def test_infer_bgp_none_when_no_data():
+    from app.srx import suggest
+    near = _mk_profile()
+    peer = _mk_profile()
+    assert suggest.infer_bgp(near, peer) is None
+
+
 def test_admin_delete_certificate_requires_serial():
     from fastapi.testclient import TestClient
     from app.main import app

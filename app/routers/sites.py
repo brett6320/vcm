@@ -316,12 +316,21 @@ def connection_detail(conn_id: int, request: Request, db: Session = Depends(get_
     ).scalars().all()
     mirror = profile.mirror(f"{profile.name}-peer")
     suggest.fill_ike_ids(mirror)
+    bgp_suggest = None
+    if peer:
+        inferred = suggest.infer_bgp(profile, _profile(peer))
+        # Suggest only if it adds something not already configured.
+        if inferred and (not profile.bgp.enabled
+                         or profile.bgp.peer_ip != inferred.peer_ip
+                         or profile.bgp.local_ip != inferred.local_ip):
+            bgp_suggest = inferred.__dict__
     return render(request, "connection.html", conn=conn, site=conn.site,
                   profile=profile.to_dict(), warnings=all_warnings(profile), peer=peer,
                   peer_site=peer.site if peer else None, candidates=candidates,
                   sites=db.execute(select(Site).order_by(Site.name)).scalars().all(),
                   vendors=generatable_vendors(), peer_suggest=mirror.to_dict(),
-                  suggestions=(_suggest_peers(db, conn, profile) if not peer else []))
+                  suggestions=(_suggest_peers(db, conn, profile) if not peer else []),
+                  bgp_suggest=bgp_suggest)
 
 
 def _suggest_peers(db: Session, conn: VpnConnection, profile: VpnProfile) -> list[dict]:
@@ -592,6 +601,28 @@ def pair_confirm(conn_id: int, request: Request, peer_id: int = Form(...),
     db.flush()
     audit(db, request, "conn.pair_confirm", f"{conn.name}<->{peer.name}", user=user)
     return _both_ends(request, db, conn, peer)
+
+
+@conn_router.post("/{conn_id}/apply-bgp")
+def apply_inferred_bgp(conn_id: int, request: Request, db: Session = Depends(get_db),
+                       user: User = Depends(current_user)):
+    """Apply the inferred BGP peering to this connection and its paired peer."""
+    conn = db.get(VpnConnection, conn_id)
+    if not conn or not conn.peer_connection_id:
+        raise HTTPException(404, "Not found or not paired")
+    peer = db.get(VpnConnection, conn.peer_connection_id)
+    cp, pp = _profile(conn), _profile(peer)
+    near_bgp = suggest.infer_bgp(cp, pp)
+    if near_bgp:
+        cp.bgp = near_bgp
+        _save_profile(conn, conn.site, cp)
+    peer_bgp = suggest.infer_bgp(_profile(peer), _profile(conn))  # re-read after save
+    if peer_bgp:
+        pp.bgp = peer_bgp
+        _save_profile(peer, peer.site, pp)
+    db.flush()
+    audit(db, request, "conn.bgp_inferred", f"{conn.name}<->{peer.name}", user=user)
+    return RedirectResponse(f"/connections/{conn.id}", status_code=303)
 
 
 @conn_router.post("/{conn_id}/unpair")

@@ -48,6 +48,22 @@
   <pre>{{ conn.generated_config }}</pre>
 </div>
 
+{% if bgp_suggest %}
+<div class="card">
+  <h3>Suggested BGP peering</h3>
+  <p class="muted">Inferred from the tunnel interface IPs of this connected pair.
+    Applying configures BGP on both ends.</p>
+  <p>Local AS <strong>{{ bgp_suggest.local_as or '—' }}</strong> · Peer AS
+    <strong>{{ bgp_suggest.peer_as or '—' }}</strong> · Neighbor
+    <strong>{{ bgp_suggest.peer_ip or '—' }}</strong> · Local
+    <strong>{{ bgp_suggest.local_ip or '—' }}</strong></p>
+  <form method="post" action="/connections/{{ conn.id }}/apply-bgp"
+        onsubmit="return confirm('Apply inferred BGP to both ends?');">
+    <button class="btn small">Apply BGP to both ends</button>
+  </form>
+</div>
+{% endif %}
+
 {% if suggestions %}
 <div class="card">
   <h3>{{ icon('warn') }} Suggested peer{{ 's' if suggestions|length > 1 else '' }}</h3>

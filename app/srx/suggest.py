@@ -37,3 +37,36 @@ def fill_ike_ids(profile: VpnProfile, domain: str = "vpn.local") -> VpnProfile:
     if not profile.remote.id:
         profile.remote.id = suggest_ike_id(profile, profile.remote, domain=domain)
     return profile
+
+
+def _tunnel_addr(cidr: str) -> str:
+    if not cidr:
+        return ""
+    try:
+        return str(ipaddress.ip_interface(cidr).ip)
+    except ValueError:
+        return cidr.split("/")[0]
+
+
+def infer_bgp(near: VpnProfile, peer: VpnProfile):
+    """Infer BGP peering for a connected pair from tunnel IPs + existing BGP.
+
+    Neighbor = the peer's tunnel-interface IP; local = our tunnel-interface IP.
+    ASNs are taken from whichever side already has them (mirrored from the peer).
+    Returns a Bgp or None if there's nothing to infer.
+    """
+    from .model import Bgp
+
+    near_ip = _tunnel_addr(near.tunnel_ip) or near.bgp.local_ip
+    peer_ip = _tunnel_addr(peer.tunnel_ip) or peer.bgp.local_ip or peer.bgp.peer_ip
+    have_asn = near.bgp.local_as or peer.bgp.enabled
+    if not (peer_ip or near_ip) and not have_asn:
+        return None
+
+    b = Bgp(enabled=True)
+    b.local_as = near.bgp.local_as or (peer.bgp.peer_as if peer.bgp.enabled else "")
+    b.peer_as = near.bgp.peer_as or (peer.bgp.local_as if peer.bgp.enabled else "")
+    b.local_ip = near_ip
+    b.peer_ip = peer_ip
+    b.networks = near.bgp.networks or near.local.protected_subnets
+    return b
