@@ -2,7 +2,8 @@
 {% from "_macros.html" import icon %}
 {% block content %}
 <p><a href="/sites/{{ site.id }}">← {{ site.name }}</a></p>
-<h1>{{ conn.name }} <span class="muted">on {{ site.name }} ({{ site.vendor.label }})</span></h1>
+<h1>{{ conn.name }} <span class="muted">on {{ site.name }} ({{ site.vendor.label }})</span>
+  <a class="btn small" href="/connections/{{ conn.id }}/edit" style="vertical-align:middle">Edit</a></h1>
 
 {% if conn.needs_review %}
 <div class="warn-box"><strong>{{ icon('warn') }} Imported — needs review.</strong>

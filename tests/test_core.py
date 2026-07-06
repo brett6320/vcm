@@ -402,6 +402,46 @@ def test_connection_name_slugified():
     assert _slug("weird/@#chars!") == "weird-chars"
 
 
+def test_edit_connection():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, VpnConnection
+    from app.security.passwords import hash_password
+    import pyotp, re, json
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="ed").first():
+                db.add(User(username="ed", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        c.post("/login", data={"username": "ed", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+        r = c.post("/sites/generate", data=dict(name="EE", vendor="juniper_srx",
+                   local_ip="1.1.1.1", remote_ip="2.2.2.2", local_subnets="10.1.0.0/24",
+                   remote_subnets="10.2.0.0/24", auth_method="certificate"),
+                   follow_redirects=False)
+        cid = int(r.headers["location"].split("/")[-1])
+        # edit form pre-fills current values
+        assert 'value="2.2.2.2"' in c.get(f"/connections/{cid}/edit").text
+        # change the remote IP + P1 encryption
+        r = c.post(f"/connections/{cid}/edit", data=dict(
+            local_ip="1.1.1.1", remote_ip="9.9.9.9", local_subnets="10.1.0.0/24",
+            remote_subnets="10.9.0.0/24", auth_method="certificate",
+            p1_enc="aes-256-cbc", p1_integ="sha256", p1_dh="14",
+            p1_ver="ikev2", p2_enc="aes-256-cbc", p2_integ="sha256", p2_pfs="14"),
+            follow_redirects=False)
+        assert r.status_code == 303
+        with SessionLocal() as db:
+            conn = db.get(VpnConnection, cid)
+            p = json.loads(conn.params_json)
+            assert p["remote"]["public_ip"] == "9.9.9.9"
+            assert p["phase1"]["encryption"] == "aes-256-cbc"
+            assert "aes-256-cbc" in conn.generated_config       # regenerated
+            assert conn.name == "EE-vpn"                          # name unchanged
+
+
 def test_change_remote_device_on_connection():
     from fastapi.testclient import TestClient
     from app.main import app
