@@ -279,10 +279,12 @@ def _san_from_cert(cert: x509.Certificate) -> str | None:
 @router.post("/cert/import")
 async def import_cert(request: Request, cert_pem: str = Form(""),
                       cert_file: UploadFile | None = File(None),
+                      signing_ca_id: str = Form(""), ca_prompted: str = Form(""),
                       db: Session = Depends(get_db), user: User = Depends(require_admin)):
     """Import a leaf (end-entity) certificate for observation only. Tracked for
     expiry but not managed — VCM cannot renew/revoke it. Accepts pasted PEM or an
-    uploaded PEM/DER file."""
+    uploaded PEM/DER file. The signing CA is auto-detected when possible; if not,
+    the operator is prompted to pick it and the choice is validated."""
     def _err(msg: str):
         db.rollback()
         cas = db.execute(select(CertAuthority).order_by(CertAuthority.id)).scalars().all()
@@ -305,11 +307,34 @@ async def import_cert(request: Request, cert_pem: str = Form(""),
             select(Certificate).where(Certificate.fingerprint == fp)).scalar_one_or_none()
         if dupe is not None:
             raise ValueError(f"This certificate is already tracked (serial {dupe.serial}).")
+
+        # Determine the signing CA: auto-detect, else prompt, else validate the choice.
+        ca_id = None
+        auto = ca_ops.find_issuer_ca(db, cert)
+        if auto is not None:
+            ca_id = auto.id
+        elif not ca_prompted:
+            cas = db.execute(select(CertAuthority).where(CertAuthority.pending.is_(False))
+                             .order_by(CertAuthority.name)).scalars().all()
+            return render(request, "cert_import_ca.html", cert_pem=cert_pem, cas=cas,
+                          subject=cert.subject.rfc4514_string(),
+                          issuer=cert.issuer.rfc4514_string())
+        elif signing_ca_id and signing_ca_id != "external":
+            chosen = db.get(CertAuthority, int(signing_ca_id))
+            chosen_cert = (x509.load_pem_x509_certificate(chosen.cert_pem.encode())
+                           if chosen and chosen.cert_pem else None)
+            if chosen_cert is None or not ca_ops.verify_signed_by(cert, chosen_cert):
+                raise ValueError(
+                    "The selected CA did not sign this certificate. Pick the correct "
+                    "issuer, or choose 'External CA (not in VCM)' to observe it unlinked.")
+            ca_id = chosen.id
+        # else: signing_ca_id == "external" (or blank after prompt) -> observe unlinked.
+
         not_after = ca_ops._aware(cert.not_valid_after_utc)
         status = CertStatus.expired if classify_expiry(not_after) == "expired" \
             else CertStatus.active
         row = Certificate(
-            ca_id=None, managed=False, source="imported",
+            ca_id=ca_id, managed=False, source="imported",
             serial=format(cert.serial_number, "x"),
             subject_dn=cert.subject.rfc4514_string(),
             san=_san_from_cert(cert),

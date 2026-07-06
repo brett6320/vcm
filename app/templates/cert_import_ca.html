@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/pki">← PKI</a></p>
+<h1>Which CA signed this certificate?</h1>
+<p class="muted">VCM couldn't automatically determine the issuing CA for the certificate
+  below (no known CA both matches the issuer name and verifies its signature).
+  Select the signing CA and it will be validated, or observe it unlinked.</p>
+
+<div class="card">
+  <p><strong>Subject:</strong> {{ subject }}</p>
+  <p><strong>Issuer:</strong> {{ issuer }}</p>
+</div>
+
+<div class="card">
+  <form method="post" action="/pki/cert/import">
+    <textarea name="cert_pem" hidden>{{ cert_pem }}</textarea>
+    <input type="hidden" name="ca_prompted" value="1">
+    <label>Signing CA</label>
+    <select name="signing_ca_id" required>
+      <option value="">— select —</option>
+      {% for c in cas %}<option value="{{ c.id }}">{{ c.name }} ({{ c.ca_type.value }})</option>{% endfor %}
+      <option value="external">External CA (not in VCM) — observe unlinked</option>
+    </select>
+    <p class="muted">The selected CA's public key must actually verify this
+      certificate's signature; a wrong choice is rejected.</p>
+    <button class="btn" style="margin-top:.6rem">Validate &amp; import</button>
+  </form>
+</div>
+{% endblock %}
