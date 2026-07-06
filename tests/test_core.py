@@ -2099,3 +2099,57 @@ def test_reciprocal_name_correlation_and_site_merge():
         with SessionLocal() as db:
             assert db.get(Site, did) is None
             assert db.query(VpnConnection).filter_by(name="orphan-tunnel").one().site_id == kid
+
+
+def test_imported_config_preserved_and_format_toggle():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, VpnConnection
+    from app.security.passwords import hash_password
+    import pyotp, re
+    curly = (
+        "security {\n"
+        "    ike {\n"
+        "        proposal P { encryption-algorithm aes-256-cbc; }\n"
+        "        policy POL { proposals P; }\n"
+        "        gateway gw { ike-policy POL; address 203.0.113.1; }\n"
+        "    }\n"
+        "    ipsec {\n"
+        "        proposal IP { encryption-algorithm aes-256-gcm; }\n"
+        "        policy IPOL { proposals IP; }\n"
+        "        vpn v1 { ike { gateway gw; } bind-interface st0.5; }\n"
+        "    }\n"
+        "}\n")
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="impc").first():
+                db.add(User(username="impc", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        c.post("/login", data={"username": "impc", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+        # Import a curly-brace Junos config.
+        r = c.post("/sites/import", data={"name": "ImpCfg", "config_text": curly},
+                   follow_redirects=False)
+        sid = int(r.headers["location"].split("/")[-1])
+        with SessionLocal() as db:
+            conn = db.query(VpnConnection).filter_by(site_id=sid).first()
+            assert conn.imported_config and "{" in conn.imported_config   # verbatim curly
+            cid = conn.id
+        # Connection page: both sides + curly original; set-format converts.
+        page = c.get(f"/connections/{cid}?fmt=orig").text
+        assert "Configuration — both sides" in page and "Imported (original)" in page
+        setpage = c.get(f"/connections/{cid}?fmt=set").text
+        assert "set security ike gateway gw address 203.0.113.1" in setpage
+        # Regeneration (edit) must NOT trample the imported original.
+        with SessionLocal() as db:
+            before = db.get(VpnConnection, cid).imported_config
+        c.post(f"/connections/{cid}/edit", data=dict(
+            local_ip="1.1.1.1", remote_ip="9.9.9.9", local_subnets="10.1.0.0/24",
+            remote_subnets="10.9.0.0/24", auth_method="certificate",
+            p1_enc="aes-256-cbc", p1_integ="sha256", p1_dh="14", p1_ver="ikev2",
+            p2_enc="aes-256-cbc", p2_integ="sha256", p2_pfs="14", confirm="1"))
+        with SessionLocal() as db:
+            assert db.get(VpnConnection, cid).imported_config == before   # untouched

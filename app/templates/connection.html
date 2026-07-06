@@ -42,11 +42,36 @@
 </div>
 
 <div class="card">
-  <h3>Generated configuration</h3>
-  <a class="btn small" href="/connections/{{ conn.id }}/config">Download</a>
-  <a class="btn small" href="/connections/{{ conn.id }}/far-end">Far-end config (on the fly)</a>
-  <pre>{{ conn.generated_config }}</pre>
+  <div style="display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap">
+    <h3 style="margin-right:auto">Configuration — both sides</h3>
+    {% if sides.is_junos %}
+    <span class="muted" style="font-size:.8rem">Format:</span>
+    <a class="btn small" href="?fmt=orig"{% if fmt != 'set' %} style="opacity:.6"{% endif %}>Curly (original)</a>
+    <a class="btn small" href="?fmt=set"{% if fmt == 'set' %} style="opacity:.6"{% endif %}>Set commands</a>
+    {% endif %}
+    <a class="btn small" href="/connections/{{ conn.id }}/config">Download</a>
+    <a class="btn small" href="/connections/{{ conn.id }}/far-end">Far-end (download)</a>
+  </div>
+  <div class="row">
+    <div>
+      <p class="muted">{{ sides.this_label }}</p>
+      <pre>{{ sides.this_config }}</pre>
+    </div>
+    <div>
+      <p class="muted">{{ sides.far_label }}</p>
+      <pre>{{ sides.far_config }}</pre>
+    </div>
+  </div>
 </div>
+
+{% if sides.imported %}
+<div class="card">
+  <h3>Imported (original) configuration</h3>
+  <p class="muted">Preserved exactly as imported — never regenerated, so operations
+    can't trample it.{% if sides.is_junos %} Toggle format above.{% endif %}</p>
+  <pre>{{ sides.imported }}</pre>
+</div>
+{% endif %}
 
 {% if bgp_suggest %}
 <div class="card">

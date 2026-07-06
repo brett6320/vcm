@@ -12,6 +12,41 @@ from .model import Bgp, Endpoint, Phase1, Phase2, VpnProfile
 from .proposals import DH_GROUPS, ENCRYPTION, INTEGRITY
 
 
+def junos_curly_to_set(text: str) -> str:
+    """Convert brace-style Junos (`show configuration`) to `set` commands
+    (`display set` style). Tokenizes on braces/semicolons so it works whether the
+    config is multi-line or compact single-line. Whole-config: preserves
+    everything, not just VPN sections. Non-Junos / already-set text is unchanged."""
+    import re
+    if "{" not in text:
+        return text  # already set-style (or not curly Junos)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)   # /* … */ comments
+    text = re.sub(r"(?m)#.*$", "", text)                 # # line comments
+    # Quoted strings, single structural chars, or runs of other non-space chars.
+    tokens = re.findall(r'"[^"]*"|[{};]|[^\s{};]+', text)
+    out: list[str] = []
+    stack: list[list[str]] = []
+    words: list[str] = []
+    for tok in tokens:
+        if tok == "{":
+            stack.append(words)
+            words = []
+        elif tok == "}":
+            if stack:
+                stack.pop()
+            words = []
+        elif tok == ";":
+            path = [w for frame in stack for w in frame] + words
+            if path:
+                out.append("set " + " ".join(path))
+            words = []
+        elif tok in ("inactive:", "protect:", "active:"):
+            continue
+        else:
+            words.append(tok)
+    return "\n".join(out) + ("\n" if out else "")
+
+
 def config_from_upload(data: bytes, filename: str = "") -> str:
     """Turn uploaded bytes into config text. A ZIP backup (e.g. Digi) is unzipped
     and the most config-like member is returned; otherwise the bytes are decoded."""
