@@ -19,6 +19,19 @@ def is_policy_based(vendor: str) -> bool:
     return vendor in POLICY_BASED_PEERS
 
 
+def _srx_ident(ident: str) -> str:
+    """Junos IKE identity type by the ID's shape: DN -> distinguished-name,
+    IP -> inet, otherwise a hostname/FQDN (the default for our IKE IDs)."""
+    import ipaddress
+    if "=" in ident:                       # e.g. CN=fw.example.com
+        return "distinguished-name"
+    try:
+        ipaddress.ip_address(ident)
+        return f"inet {ident}"
+    except ValueError:
+        return f"hostname {ident}"
+
+
 def generate(profile: VpnProfile) -> str:
     fn = _REGISTRY.get(profile.vendor)
     if not fn:
@@ -77,12 +90,12 @@ def gen_juniper_srx(p: VpnProfile) -> str:
         + ("v2-only" if p.phase1.ike_version == "ikev2" else "v1-only"),
         f"set security ike gateway gw-{n} dead-peer-detection interval {p.phase1.dpd_seconds}",
     ]
-    if p.remote.id:
-        lines.append(f"set security ike gateway gw-{n} remote-identity "
-                     f"distinguished-name container \"{p.remote.id}\"")
     if p.local.id:
         lines.append(f"set security ike gateway gw-{n} local-identity "
-                     f"distinguished-name")
+                     + _srx_ident(p.local.id))
+    if p.remote.id:
+        lines.append(f"set security ike gateway gw-{n} remote-identity "
+                     + _srx_ident(p.remote.id))
     # IPsec proposal
     lines += [
         f"set security ipsec proposal ipsec-prop-{n} protocol {p.phase2.protocol}",

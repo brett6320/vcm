@@ -177,6 +177,21 @@ def test_interface_and_tunnel_ip_inputs():
     assert "local-address interface ethernet1/2" in pc and "tunnel-interface tunnel.7" in pc
 
 
+def test_srx_uses_hostname_identities():
+    p = _mk_profile()
+    p.local.id = "hq.vpn.local"
+    p.remote.id = "dc.vpn.local"
+    cfg = generators.generate(p)
+    assert "local-identity hostname hq.vpn.local" in cfg
+    assert "remote-identity hostname dc.vpn.local" in cfg
+    assert "distinguished-name" not in cfg
+    # IP-form ID -> inet; DN-form -> distinguished-name
+    p.local.id = "203.0.113.1"; p.remote.id = "CN=fw.example.com"
+    cfg = generators.generate(p)
+    assert "local-identity inet 203.0.113.1" in cfg
+    assert "remote-identity distinguished-name" in cfg
+
+
 def test_srx_traffic_selectors_by_peer_platform():
     ts_line = "vpn-siteA traffic-selector ts0 local-ip"
     # Route-based peer (another SRX) → no traffic-selector config lines
