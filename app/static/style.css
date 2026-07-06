@@ -34,7 +34,8 @@ a:hover { text-decoration: underline; }
 .qr-box { background: #fff; padding: 12px; border-radius: 8px; display: inline-block;
   line-height: 0; box-shadow: 0 0 0 1px var(--border); }
 .qr-box img, .qr-box svg { display: block; width: 200px; height: 200px; }
-nav a { margin-right: .8rem; text-decoration: none; color: var(--accent); }
+nav a, nav a:visited { margin-right: .8rem; text-decoration: none; color: var(--accent); }
+.brand:visited { color: var(--fg); }
 .right { margin-left: auto; display: flex; align-items: center; gap: .8rem; }
 .who { color: var(--muted); font-size: .85rem; }
 main { max-width: 1000px; margin: 1.5rem auto; padding: 0 1rem; }

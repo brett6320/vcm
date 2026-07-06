@@ -470,4 +470,12 @@ _REGISTRY = {
     "cisco_firepower": gen_cisco_firepower,
     "strongswan": gen_strongswan,
     "mikrotik": gen_mikrotik,
+    "aws": lambda p: _cloud_note("AWS", p),
+    "azure": lambda p: _cloud_note("Azure", p),
 }
+
+
+def _cloud_note(cloud: str, p: VpnProfile) -> str:
+    return (f"# {cloud} VPN gateway config is managed by {cloud}. Import the "
+            f"{cloud}-provided configuration, then generate the far-end (on-prem) "
+            f"config from this connection.")
