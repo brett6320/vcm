@@ -20,6 +20,16 @@
 </svg>
 {% endmacro %}
 
+{# Like rated_select but shows the platform's own keyword as the label. #}
+{% macro vendor_select(name, opts, selected) %}
+<select name="{{ name }}" data-vendor-field>
+  {% for o in opts %}
+  <option value="{{ o.value }}" data-sec="{{ o.security }}"
+    {% if o.value == selected %}selected{% endif %}>{{ o.label }} — {{ o.security }}</option>
+  {% endfor %}
+</select>
+{% endmacro %}
+
 {% macro rated_select(name, opts, selected) %}
 <select name="{{ name }}">
   {% for o in opts %}

@@ -58,14 +58,20 @@ def _save_profile(conn: VpnConnection, site: Site, profile: VpnProfile) -> None:
     conn.generated_config = generators.generate(profile)
 
 
+def _vendor_catalog() -> dict:
+    return {v.value: proposals.vendor_options(v.value) for v in Vendor}
+
+
 def _sites_page(request: Request, db: Session, **extra):
     rows = db.execute(select(Site).order_by(Site.id.desc())).scalars().all()
     counts = dict(db.execute(
         select(VpnConnection.site_id, func.count()).group_by(VpnConnection.site_id)
     ).all())
     d = defaults_svc.get_defaults(db)
+    default_vendor = list(Vendor)[0].value
     return render(request, "sites.html", sites=rows, counts=counts, vendors=list(Vendor),
-                  defaults=d, opts=proposals.options(), **extra)
+                  defaults=d, vopts=proposals.vendor_options(default_vendor),
+                  vendor_catalog=_vendor_catalog(), default_vendor=default_vendor, **extra)
 
 
 def _build_profile_from_form(db, name, vendor, model, local_ip, local_id, local_subnets,
@@ -194,7 +200,7 @@ def site_detail(site_id: int, request: Request, db: Session = Depends(get_db),
         conns.append({"c": c, "warnings": all_warnings(prof), "p": prof.to_dict()})
     d = defaults_svc.get_defaults(db)
     return render(request, "site.html", site=site, conns=conns, defaults=d,
-                  opts=proposals.options())
+                  vopts=proposals.vendor_options(site.vendor.value))
 
 
 @router.post("/{site_id}/connections")

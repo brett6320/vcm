@@ -203,6 +203,30 @@ def options() -> dict:
     }
 
 
+def vendor_options(vendor: str) -> dict:
+    """Per-vendor option lists: only algorithms the platform supports, labelled
+    with that platform's own keyword. `value` stays canonical (backend-neutral)."""
+    def opts(table):
+        rows = []
+        for canon, a in table.items():
+            kw = a.vendor.get(vendor)
+            if not kw:
+                continue
+            rows.append({"value": canon, "label": kw, "security": a.security.value})
+        return sorted(rows, key=lambda o: (_SEC_ORDER[o["security"]], o["label"]))
+
+    return {
+        "encryption": opts(ENCRYPTION),
+        "integrity": opts(INTEGRITY),
+        "dh_groups": opts(DH_GROUPS),
+        "ike_versions": [{"value": k, "label": k, "security": v.value}
+                         for k, v in sorted(IKE_VERSIONS.items(),
+                                            key=lambda kv: _SEC_ORDER[kv[1].value])],
+        "auth_methods": [{"value": "certificate", "label": "certificate", "security": "strong"},
+                         {"value": "psk", "label": "pre-shared-key", "security": "weak"}],
+    }
+
+
 def catalog() -> dict:
     """Machine-readable catalog for the UI (defaults editor + warnings legend)."""
     def dump(t):
