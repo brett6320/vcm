@@ -13,11 +13,11 @@ from .db import init_db, SessionLocal
 from .models import Role, User
 from .security.deps import AuthRedirect
 from .security.passwords import hash_password
-from .routers import admin, auth, pki, profile, sites, ui
+from .routers import admin, api, auth, pki, profile, sites, ui
 from .templates_env import render
 
 # Path prefixes that speak JSON (fetch/XHR clients) — errors stay JSON there.
-_JSON_PREFIXES = ("/mfa/passkey", "/mfa/enroll/passkey", "/healthz")
+_JSON_PREFIXES = ("/api", "/mfa/passkey", "/mfa/enroll/passkey", "/healthz")
 
 
 def _wants_json(request: Request) -> bool:
@@ -50,6 +50,7 @@ app.include_router(sites.router)
 app.include_router(sites.conn_router)
 app.include_router(profile.router)
 app.include_router(admin.router)
+app.include_router(api.router)
 
 
 @app.exception_handler(AuthRedirect)
