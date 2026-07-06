@@ -9,7 +9,8 @@
   <form method="post" action="/sites/import" enctype="multipart/form-data">
     <label>Site name (optional — inferred if blank)</label><input name="name">
     <label>Upload a backup / config file (optional)</label>
-    <input type="file" name="file" accept=".xml,.conf,.cfg,.txt,.json">
+    <input type="file" name="file" accept=".xml,.conf,.cfg,.txt,.json,.zip,.da">
+    <span class="muted" style="font-size:.75rem">PEM/XML/text configs, or a ZIP backup (e.g. Digi).</span>
     <label style="margin-top:.6rem">…or paste configuration text</label>
     <textarea name="config_text" style="min-height:240px"
               placeholder="Paste config here (ignored if a file is uploaded)"></textarea>

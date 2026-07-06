@@ -278,12 +278,13 @@ def _apply_import_update(db: Session, site: Site, parsed: dict, config_text: str
 async def do_import(request: Request, name: str = Form(""), config_text: str = Form(""),
                     action: str = Form(""), file: UploadFile = File(None),
                     db: Session = Depends(get_db), user: User = Depends(current_user)):
-    # A file upload (e.g. a pfSense config.xml backup) takes precedence over paste.
+    # A file upload (pfSense config.xml, or a Digi ZIP backup) takes precedence
+    # over paste. ZIP archives are unpacked to the config-bearing member.
     if file is not None and file.filename:
         try:
-            config_text = (await file.read()).decode("utf-8", "replace")
-        except Exception:  # noqa: BLE001
-            return render(request, "import.html", error="Could not read the uploaded file")
+            config_text = importer.config_from_upload(await file.read(), file.filename)
+        except Exception as e:  # noqa: BLE001
+            return render(request, "import.html", error=f"Could not read the uploaded file: {e}")
     if not config_text.strip():
         return render(request, "import.html", error="Paste a config or upload a file")
     parsed = importer.import_site(config_text, name or None)

@@ -12,6 +12,44 @@ from .model import Bgp, Endpoint, Phase1, Phase2, VpnProfile
 from .proposals import DH_GROUPS, ENCRYPTION, INTEGRITY
 
 
+def config_from_upload(data: bytes, filename: str = "") -> str:
+    """Turn uploaded bytes into config text. A ZIP backup (e.g. Digi) is unzipped
+    and the most config-like member is returned; otherwise the bytes are decoded."""
+    is_zip = data[:2] == b"PK" or (filename or "").lower().endswith(".zip")
+    if is_zip:
+        return _text_from_zip(data)
+    return data.decode("utf-8", "replace")
+
+
+def _text_from_zip(data: bytes) -> str:
+    """Pick the member that most looks like a device config (VPN/ipsec/bgp
+    markers win; else the largest decodable text member)."""
+    import io
+    import zipfile
+
+    markers = ("ipsec", "config vpn", "set security", "connections {", "/ip ipsec",
+               "router bgp", "crypto ", "<ipsec>")
+    best, best_score = "", (-1, -1)
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as e:
+        raise ValueError(f"Not a readable ZIP backup: {e}") from e
+    for info in zf.infolist():
+        if info.is_dir() or info.file_size > 8_000_000:
+            continue
+        try:
+            text = zf.read(info).decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            continue
+        low = text.lower()
+        score = (sum(m in low for m in markers), len(text))
+        if score > best_score:
+            best, best_score = text, score
+    if not best:
+        raise ValueError("ZIP backup contained no readable config file")
+    return best
+
+
 def _mask_to_cidr(ip: str, mask: str | None) -> str:
     """'10.0.0.0','255.255.255.0' -> '10.0.0.0/24'; passes CIDR/host through."""
     import ipaddress
@@ -100,14 +138,19 @@ def _reverse(table: dict, vendor: str, kw: str) -> str:
 
 def extract_vpn_sections(text: str, vendor: str) -> str:
     """Strip everything except VPN-relevant config so we don't persist unrelated
-    (and possibly sensitive) device state — only IKE/IPsec/tunnel sections."""
+    (and possibly sensitive) device state. Keeps IKE/IPsec/tunnel sections AND
+    the routing that rides the tunnel — BGP and its downstream objects
+    (prefix-lists, route-maps, policy) — so re-imports diff those changes too."""
     if vendor == "juniper_srx":
         keep = []
         for line in text.splitlines():
             s = line.strip()
             if (s.startswith("set security ike") or s.startswith("set security ipsec")
                     or "interfaces st0" in s
-                    or ("routing-options" in s and "st0" in s)):
+                    or ("routing-options" in s and "st0" in s)
+                    or s.startswith("set protocols bgp")
+                    or s.startswith("set policy-options")   # prefix-list / policy-statement
+                    or s.startswith("set routing-options autonomous-system")):
                 keep.append(line.rstrip())
         return "\n".join(keep) + ("\n" if keep else "")
     if vendor == "digi":
@@ -119,13 +162,17 @@ def extract_vpn_sections(text: str, vendor: str) -> str:
     if vendor in ("pfsense", "strongswan"):
         return _extract_brace_blocks(text, ("connections", "secrets"))
     if vendor == "mikrotik":
-        keep = [l.rstrip() for l in text.splitlines() if "/ip ipsec" in l]
+        keep = [l.rstrip() for l in text.splitlines()
+                if "/ip ipsec" in l or "/routing bgp" in l or "/routing filter" in l
+                or "/routing prefix" in l]
         return "\n".join(keep) + ("\n" if keep else "")
     if vendor == "fortinet":
         keep, grab = [], False
         for line in text.splitlines():
             s = line.strip()
-            if s.startswith("config vpn ipsec"):
+            if (s.startswith("config vpn ipsec") or s.startswith("config router bgp")
+                    or s.startswith("config router prefix-list")
+                    or s.startswith("config router route-map")):
                 grab = True
             if grab:
                 keep.append(line.rstrip())
@@ -134,11 +181,24 @@ def extract_vpn_sections(text: str, vendor: str) -> str:
         return "\n".join(keep) + ("\n" if keep else "")
     if vendor == "palo_alto":
         keep = [l.rstrip() for l in text.splitlines()
-                if re.search(r"network (ike|tunnel ipsec)", l)]
+                if re.search(r"network (ike|tunnel ipsec)", l)
+                or re.search(r"network virtual-router \S+ protocol bgp", l)
+                or "network virtual-router" in l and ("redist" in l or "prefix" in l)]
         return "\n".join(keep) + ("\n" if keep else "")
     if vendor == "cisco_firepower":
-        keep = [l.rstrip() for l in text.splitlines()
-                if re.match(r"\s*(crypto |tunnel-group |access-list |group-policy )", l)]
+        keep, grab = [], False
+        for line in text.splitlines():
+            s = line.strip()
+            if re.match(r"(crypto |tunnel-group |access-list |group-policy |"
+                        r"ip prefix-list |route-map )", s):
+                keep.append(line.rstrip())
+                grab = s.startswith("route-map ")  # keep its indented body
+            elif s.startswith("router bgp"):
+                keep.append(line.rstrip()); grab = True
+            elif grab and (line[:1] in (" ", "\t")):   # indented sub-lines of bgp/route-map
+                keep.append(line.rstrip())
+            else:
+                grab = False
         return "\n".join(keep) + ("\n" if keep else "")
     return text
 
