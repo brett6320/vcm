@@ -30,7 +30,7 @@
   </table>
 </div>
 
-<div class="card">
+<div class="card collapse-default">
   <h3>Add a connection to {{ site.name }}</h3>
   <form method="post" action="/sites/{{ site.id }}/connections">
     <label>Connection name</label><input name="conn_name" placeholder="blank = auto">
@@ -90,7 +90,7 @@
 </div>
 
 {% if user.role.value == 'admin' %}
-<div class="card">
+<div class="card collapse-default">
   <h3>Danger zone</h3>
   <form method="post" action="/sites/{{ site.id }}/delete"
         onsubmit="return confirm('Delete {{ site.name }} and all its connections?');">

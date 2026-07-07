@@ -31,7 +31,7 @@
     ({{ profile.remote.id }}) subnets {{ profile.remote.protected_subnets|join(', ') or '—' }}</p>
 </div>
 
-<div class="card">
+<div class="card collapse-default">
   <h3>Rename connection</h3>
   <form method="post" action="/connections/{{ conn.id }}/rename" style="display:flex;gap:.5rem;align-items:end">
     <div style="flex:1"><label>New name</label><input name="new_name" value="{{ conn.name }}" required></div>
@@ -160,7 +160,7 @@
 </div>
 {% endif %}
 
-<div class="card">
+<div class="card collapse-default">
   <h3>Far-end (peer) configuration</h3>
   {% if peer %}
     <p>Paired with <a href="/connections/{{ peer.id }}">{{ peer.name }}</a>
@@ -214,7 +214,7 @@
 </div>
 
 {% if user.role.value == 'admin' %}
-<div class="card">
+<div class="card collapse-default">
   <h3>Danger zone</h3>
   <form method="post" action="/connections/{{ conn.id }}/delete"
         onsubmit="return confirm('Delete connection {{ conn.name }}?');">

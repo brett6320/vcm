@@ -120,7 +120,14 @@ audit log.
 - **Notifications** — optional email (SMTP or Mailgun) and SMS (Twilio) backends,
   used e.g. to send a new user their temporary credentials.
 - **UI** — server-rendered Jinja templates with light / dark / **system**
-  (default) theme.
+  (default) theme. On panel-heavy pages each panel heading is click-collapsible
+  (state persists per page). **Non-essential panels start collapsed** by default
+  — action/creation forms and advanced/danger sections — while the primary read
+  view stays open; a saved expand/collapse choice is always respected. Currently
+  default-collapsed: PKI *Create CA*, *Import existing CA*, *Import leaf
+  certificate*, *Sign appliance CSR* (hierarchy + recent-certs stay open);
+  Connection *Rename*, *Far-end configuration*, *Danger zone* (proposals/status
+  stay open); Site *Add a connection*, *Danger zone* (connection list stays open).
 - **Docker image + compose overlays** — ready to run standalone, or behind
   Traefik, NGINX, or a Cloudflare Tunnel, with an optional TLS-encrypted Postgres.
 
