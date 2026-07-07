@@ -142,6 +142,20 @@ _inject(DH_GROUPS, "mikrotik", {
     "1": "modp768", "2": "modp1024", "5": "modp1536", "14": "modp2048", "15": "modp3072",
     "16": "modp4096", "19": "ecp256", "20": "ecp384", "21": "ecp521"})
 
+# TP-Link ER series (Omada-managed gateways). Site-to-site IPsec is policy-based
+# and PSK-only. The controller UI builds a combined proposal string from the
+# authentication, encryption and DH-group keywords below (Phase-1: "sha256-aes256-dh14";
+# Phase-2/ESP: "esp-sha256-aes256"). Omada gateways expose only CBC AES / 3DES / DES
+# (no AEAD/GCM), MD5/SHA1/SHA256 integrity, and MODP DH groups (no ECP) — algorithms
+# the platform can't negotiate are deliberately omitted so they aren't offered.
+_inject(ENCRYPTION, "tplink_er", {
+    "des": "des", "3des": "3des", "aes-128-cbc": "aes128", "aes-192-cbc": "aes192",
+    "aes-256-cbc": "aes256"})
+_inject(INTEGRITY, "tplink_er", {
+    "md5": "md5", "sha1": "sha1", "sha256": "sha256"})
+_inject(DH_GROUPS, "tplink_er", {
+    "1": "dh1", "2": "dh2", "5": "dh5", "14": "dh14", "15": "dh15", "16": "dh16"})
+
 
 # IKE version
 IKE_VERSIONS = {"ikev1": Security.weak, "ikev2": Security.strong}
