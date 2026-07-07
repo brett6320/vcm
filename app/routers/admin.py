@@ -274,4 +274,7 @@ def backups_delete(bid: int, request: Request, db: Session = Depends(get_db),
 def audit_log(request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     rows = db.execute(select(AuditLog).order_by(AuditLog.id.desc()).limit(200)).scalars().all()
     integrity = audit_chain.verify(db)
-    return render(request, "audit.html", rows=rows, integrity=integrity)
+    # Per-row validation status keyed by id, so each displayed line shows its own
+    # verdict alongside the overall summary.
+    statuses = {s["row"].id: s for s in audit_chain.verify_rows(db)}
+    return render(request, "audit.html", rows=rows, integrity=integrity, statuses=statuses)

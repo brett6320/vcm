@@ -99,3 +99,33 @@ def verify(db: Session) -> dict:
         prev = r.entry_hash
     return {"ok": True, "total": len(rows), "checked": len(rows),
             "broken_id": None, "broken_index": None, "reason": None}
+
+
+def verify_rows(db: Session) -> list[dict]:
+    """Validate every row independently and return one status dict per row (in
+    id order). Each dict carries the row plus:
+    - ``link_ok``: prev_hash equals the previous row's entry_hash (chain link),
+    - ``hash_ok``: recomputed entry_hash matches the stored value,
+    - ``ok``: both hold,
+    - ``computed``: the recomputed entry_hash (for display/diagnostics).
+    A row is valid iff both checks pass; the first invalid row is where the
+    chain breaks."""
+    rows = db.execute(select(AuditLog).order_by(AuditLog.id.asc())).scalars().all()
+    prev = GENESIS_HASH
+    out = []
+    for r in rows:
+        computed = row_hash(r.prev_hash, r)
+        link_ok = (r.prev_hash == prev)
+        hash_ok = (r.entry_hash == computed)
+        reason = None
+        if not link_ok:
+            reason = "prev_hash link broken (deleted/reordered entry)"
+        elif not hash_ok:
+            reason = "entry_hash mismatch (modified entry)"
+        out.append({"row": r, "link_ok": link_ok, "hash_ok": hash_ok,
+                    "ok": link_ok and hash_ok, "computed": computed,
+                    "reason": reason})
+        # Advance along the stored chain so later rows are judged relative to
+        # the recorded (possibly tampered) predecessor, not a recomputed one.
+        prev = r.entry_hash
+    return out

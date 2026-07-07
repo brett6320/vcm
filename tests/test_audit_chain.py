@@ -132,6 +132,38 @@ def test_backfill_populates_missing_hashes(db):
     assert audit_chain.verify(db)["ok"] is True
 
 
+def test_verify_rows_flags_only_the_broken_line(db):
+    for i in range(5):
+        _write(db, f"test.{i}")
+    rows = db.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
+    victim = rows[2]
+    victim.detail = "tampered!"
+    db.commit()
+
+    statuses = audit_chain.verify_rows(db)
+    assert len(statuses) == 5
+    by_id = {s["row"].id: s for s in statuses}
+    # Only the modified row fails, and it fails on the hash check specifically.
+    assert by_id[victim.id]["ok"] is False
+    assert by_id[victim.id]["hash_ok"] is False
+    assert by_id[victim.id]["link_ok"] is True
+    assert all(s["ok"] for s in statuses if s["row"].id != victim.id)
+    # Recomputed hash is exposed for display.
+    assert by_id[victim.id]["computed"] == audit_chain.row_hash(victim.prev_hash, victim)
+
+
+def test_verify_rows_flags_broken_link_on_deletion(db):
+    for i in range(5):
+        _write(db, f"test.{i}")
+    rows = db.execute(select(AuditLog).order_by(AuditLog.id)).scalars().all()
+    following_id = rows[3].id
+    db.delete(rows[2])
+    db.commit()
+    by_id = {s["row"].id: s for s in audit_chain.verify_rows(db)}
+    assert by_id[following_id]["link_ok"] is False
+    assert by_id[following_id]["ok"] is False
+
+
 def test_startup_backfill_hook(db):
     for i in range(3):
         db.add(AuditLog(action=f"legacy.{i}"))

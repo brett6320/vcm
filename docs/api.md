@@ -436,7 +436,11 @@ Tampered chain — pinpoints the first broken row:
 ```
 
 The same status is shown on the admin **Audit log** page, with a **Verify**
-button to re-run the check.
+button to re-run the check. That page also renders each entry's `prev_hash` and
+`entry_hash` (abbreviated, full value on hover) and a per-line **valid / broken**
+badge — each row is validated independently (its `entry_hash` is recomputed and
+its `prev_hash` link to the previous row is checked) so an operator can see the
+chain and exactly which line(s) fail, alongside the overall summary.
 
 > **Caveat.** Hash chaining detects casual tampering: editing, deleting, or
 > reordering existing entries all break the chain and are pinpointed. It does
