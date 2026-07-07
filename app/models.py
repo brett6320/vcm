@@ -458,3 +458,8 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(64))
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Tamper-evidence hash chain (see app/security/audit_chain.py). Nullable so
+    # the additive startup sync can add them; a startup backfill then populates
+    # historical rows. entry_hash = sha256(prev_hash + canonical(immutable fields)).
+    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    entry_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)

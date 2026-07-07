@@ -17,7 +17,7 @@ from ..models import (
     ApiToken, AuditLog, Certificate, Site, TokenScope, VpnConnection,
 )
 from ..pki import ca as ca_ops
-from ..security import apitokens
+from ..security import apitokens, audit_chain
 from ..security.deps import audit
 from ..srx.model import VpnProfile, all_warnings
 
@@ -133,6 +133,13 @@ def list_audit(limit: int = 100, db: Session = Depends(get_db), token: ApiToken 
     return {"entries": [
         {"id": r.id, "ts": _iso(r.ts), "username": r.username, "action": r.action,
          "detail": r.detail, "ip": r.ip} for r in rows]}
+
+
+@router.get("/audit/verify")
+def verify_audit(db: Session = Depends(get_db), token: ApiToken = _admin):
+    """Re-walk the audit hash chain and report integrity — admin-scoped.
+    Returns {"ok": true, ...} when intact, or pinpoints the first broken row."""
+    return audit_chain.verify(db)
 
 
 @router.post("/tokens/{token_id}/revoke")

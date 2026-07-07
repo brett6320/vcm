@@ -51,6 +51,7 @@ def init_db() -> None:
     _relax_ca_name_uniqueness(engine)
     _relax_nullable_columns(engine)
     _backfill_cert_fingerprints(engine)
+    _backfill_audit_chain(engine)
 
 
 def _relax_nullable_columns(eng) -> None:
@@ -126,6 +127,25 @@ def _backfill_cert_fingerprints(eng) -> None:
                             {"fp": fp, "id": rid})
         except Exception as e:  # noqa: BLE001
             log.error("schema sync: fingerprint backfill on %s failed: %s", table, e)
+
+
+def _backfill_audit_chain(eng) -> None:
+    """Populate the audit-log hash chain for rows written before the columns
+    existed, so the chain is continuous from the first historical entry."""
+    insp = inspect(eng)
+    if not insp.has_table("audit_log"):
+        return
+    cols = {c["name"] for c in insp.get_columns("audit_log")}
+    if "prev_hash" not in cols or "entry_hash" not in cols:
+        return
+    try:
+        from .security import audit_chain
+        with Session(eng) as db:
+            n = audit_chain.backfill(db)
+        if n:
+            log.warning("schema sync: backfilled audit chain for %d rows", n)
+    except Exception as e:  # noqa: BLE001
+        log.error("schema sync: audit chain backfill failed: %s", e)
 
 
 def add_missing_columns(eng) -> None:

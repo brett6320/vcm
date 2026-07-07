@@ -10,6 +10,7 @@ from .. import notify as notify_mod
 from ..config import get_settings
 from ..db import get_db
 from ..models import AuditLog, Backup, IPAllowEntry, Role, User
+from ..security import audit_chain
 from ..security.deps import audit, require_admin
 from ..security.passwords import hash_password
 from ..srx import defaults as defaults_svc
@@ -272,4 +273,5 @@ def backups_delete(bid: int, request: Request, db: Session = Depends(get_db),
 @router.get("/audit")
 def audit_log(request: Request, db: Session = Depends(get_db), user: User = Depends(require_admin)):
     rows = db.execute(select(AuditLog).order_by(AuditLog.id.desc()).limit(200)).scalars().all()
-    return render(request, "audit.html", rows=rows)
+    integrity = audit_chain.verify(db)
+    return render(request, "audit.html", rows=rows, integrity=integrity)

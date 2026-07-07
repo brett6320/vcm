@@ -2,10 +2,26 @@
 {% block content %}
 <h1>Audit log</h1>
 <div class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+    {% if integrity and integrity.ok %}
+    <span class="alert notice" style="margin:0">
+      &#10003; Chain integrity intact &mdash; verified {{ integrity.checked }} entr{{ 'y' if integrity.checked == 1 else 'ies' }}.
+    </span>
+    {% elif integrity %}
+    <span class="alert error" style="margin:0">
+      &#9888; Chain integrity broken at entry id {{ integrity.broken_id }}
+      ({{ integrity.reason }}). Verified {{ integrity.checked }} of {{ integrity.total }} entries before the break.
+    </span>
+    {% endif %}
+    <a role="button" class="btn" href="/admin/audit">Verify</a>
+  </div>
+</div>
+<div class="card">
   <table>
     <tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th></tr>
     {% for r in rows %}
-    <tr><td class="muted">{{ r.ts.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+    <tr{% if integrity and not integrity.ok and r.id == integrity.broken_id %} class="sev-broken"{% endif %}>
+        <td class="muted">{{ r.ts.strftime('%Y-%m-%d %H:%M:%S') }}</td>
         <td>{{ r.username or '—' }}</td><td>{{ r.action }}</td>
         <td class="muted">{{ r.detail or '' }}</td><td>{{ r.ip or '' }}</td></tr>
     {% endfor %}
