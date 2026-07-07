@@ -63,10 +63,10 @@
 </div>
 {% endif %}
 
-{% if user and user.role.value == 'admin' %}
+{# IPsec + BGP config (VPN-relevant only) — visible to all, collapsed by default. #}
 <div class="card">
   <details>
-    <summary style="cursor:pointer"><strong>Configuration — both sides</strong>
+    <summary style="cursor:pointer"><strong>IPsec &amp; BGP configuration — both sides</strong>
       <span class="muted">(hidden by default — click to show)</span></summary>
     <div style="display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap;margin-top:.6rem">
       {% if sides.is_junos %}
@@ -90,17 +90,17 @@
   </details>
 </div>
 
-{% if sides.imported %}
+{# Full imported device config may contain unrelated settings — admins only. #}
+{% if user and user.role.value == 'admin' and sides.imported %}
 <div class="card">
   <details>
-    <summary style="cursor:pointer"><strong>Imported (original) configuration</strong>
-      <span class="muted">(hidden by default — click to show)</span></summary>
-    <p class="muted" style="margin-top:.6rem">Preserved exactly as imported — never
-      regenerated, so operations can't trample it.</p>
+    <summary style="cursor:pointer"><strong>Imported (original, full device) configuration</strong>
+      <span class="muted">(admin only — hidden by default)</span></summary>
+    <p class="muted" style="margin-top:.6rem">The full device config exactly as imported —
+      never regenerated, so operations can't trample it.</p>
     <pre>{{ sides.imported }}</pre>
   </details>
 </div>
-{% endif %}
 {% endif %}
 
 {% if interop_issues %}
@@ -165,7 +165,7 @@
   {% if peer %}
     <p>Paired with <a href="/connections/{{ peer.id }}">{{ peer.name }}</a>
       on <a href="/sites/{{ peer_site.id }}">{{ peer_site.name }}</a> — mirrored crypto.</p>
-    {% if user and user.role.value == 'admin' %}<a class="btn small" href="/connections/{{ peer.id }}/config">Download peer config</a>{% endif %}
+    <a class="btn small" href="/connections/{{ peer.id }}/config">Download peer config</a>
     <form method="post" action="/connections/{{ conn.id }}/unpair" style="display:inline"
           onsubmit="return confirm('Unpair from {{ peer.name }}? The peer connection is kept but unlinked.');">
       <button class="btn small danger">Unpair</button></form>

@@ -2212,7 +2212,7 @@ def test_imported_config_preserved_and_format_toggle():
             cid = conn.id
         # Connection page: both sides + curly original; set-format converts.
         page = c.get(f"/connections/{cid}?fmt=orig").text
-        assert "Configuration — both sides" in page and "Imported (original)" in page
+        assert "IPsec &amp; BGP configuration" in page and "full device) configuration" in page
         setpage = c.get(f"/connections/{cid}?fmt=set").text
         assert "set security ike gateway gw address 203.0.113.1" in setpage
         # Regeneration (edit) must NOT trample the imported original.
@@ -2297,6 +2297,7 @@ def test_proposal_rows_side_by_side():
 
 
 def test_full_config_admin_only_and_collapsed():
+    """IPsec+BGP config visible to all (collapsed); full imported device config admin-only."""
     import json
     from fastapi.testclient import TestClient
     from app.main import app
@@ -2323,20 +2324,23 @@ def test_full_config_admin_only_and_collapsed():
                           remote=Endpoint("r", "2.2.2.2", "", ["10.2.0.0/24"]))
         conn = VpnConnection(site_id=st.id, name="hc",
                              params_json=json.dumps(prof.to_dict()),
-                             generated_config="set security ike proposal p")
+                             generated_config="set security ike proposal p",
+                             imported_config="set system host-name fw\nset security ike proposal p")
         db.add(conn); db.commit()
         cid = conn.id
 
     with TestClient(app, client=("127.0.0.1", 1)) as c:
         _login(c, "hcadm")
         page = c.get(f"/connections/{cid}").text
-        assert "hidden by default" in page and "<details>" in page   # collapsed by default
+        assert "IPsec &amp; BGP configuration" in page              # VPN config block
+        assert "full device) configuration" in page                # admin sees full device config
         assert c.get(f"/connections/{cid}/config").status_code == 200
 
     with TestClient(app, client=("127.0.0.1", 1)) as c:
         _login(c, "hcop")
         page = c.get(f"/connections/{cid}").text
-        assert "hidden by default" not in page          # no full-config block for operator
-        assert "Proposals" in page                       # summary still visible
-        assert c.get(f"/connections/{cid}/config").status_code == 403
-        assert c.get(f"/connections/{cid}/far-end").status_code == 403
+        assert "IPsec &amp; BGP configuration" in page              # operator SEES IPsec+BGP
+        assert "full device) configuration" not in page            # but NOT the full device config
+        assert "Proposals" in page
+        assert c.get(f"/connections/{cid}/config").status_code == 200   # IPsec+BGP download allowed
+        assert c.get(f"/connections/{cid}/far-end").status_code == 200
