@@ -2344,3 +2344,20 @@ def test_full_config_admin_only_and_collapsed():
         assert "Proposals" in page
         assert c.get(f"/connections/{cid}/config").status_code == 200   # IPsec+BGP download allowed
         assert c.get(f"/connections/{cid}/far-end").status_code == 200
+
+
+def test_mfa_page_auto_attempts_passkey_when_enrolled():
+    from app.templates_env import templates
+    t = templates.get_template("mfa.html")
+    ctx = {"request": None, "has_totp": True, "user": None, "app_name": "VCM"}
+    with_pk = t.render({**ctx, "has_passkey": True})
+    no_pk = t.render({**ctx, "has_passkey": False})
+    # The auto-trigger marker + hint appear only when a passkey is enrolled; the
+    # webauthn.js loader fires authPasskey({auto:true}) when it sees the marker.
+    assert 'id="passkey-auto"' in with_pk and "Waiting for your passkey" in with_pk
+    assert 'id="passkey-auto"' not in no_pk
+    # Fallback button remains for explicit use.
+    assert "authPasskey()" in with_pk
+
+    js = open("app/static/webauthn.js").read()
+    assert "passkey-auto" in js and "authPasskey({ auto: true })" in js

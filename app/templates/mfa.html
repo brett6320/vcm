@@ -4,6 +4,8 @@
 <div class="card" style="max-width:420px;margin:3rem auto;">
   <h2>Multi-factor authentication</h2>
   {% if has_passkey %}
+  <span id="passkey-auto" hidden></span>
+  <p class="muted" style="text-align:center;margin:.2rem 0">Waiting for your passkey…</p>
   <button class="btn" style="width:100%" onclick="authPasskey()">{{ icon('key') }} Use passkey</button>
   <hr>
   {% endif %}
