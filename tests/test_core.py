@@ -2222,3 +2222,49 @@ def test_proposal_rows_side_by_side():
     solo = proposal_rows(a, None)
     r = solo[0]["rows"][1]
     assert r["far"] == "" and r["match"] is True
+
+
+def test_full_config_admin_only_and_collapsed():
+    import json
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal, init_db
+    from app.models import User, Role, Site, Vendor, VpnConnection
+    from app.srx.model import VpnProfile, Endpoint
+    from app.security.passwords import hash_password
+    import pyotp, re
+    init_db()
+
+    def _login(c, user):
+        c.post("/login", data={"username": user, "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+
+    with SessionLocal() as db:
+        for u, role in [("hcadm", Role.admin), ("hcop", Role.operator)]:
+            if not db.query(User).filter_by(username=u).first():
+                db.add(User(username=u, password_hash=hash_password("pw123456"), role=role))
+        st = Site(name="HideCfg", vendor=Vendor.juniper_srx, source="test")
+        db.add(st); db.flush()
+        prof = VpnProfile(name="hc", vendor="juniper_srx",
+                          local=Endpoint("l", "1.1.1.1", "", ["10.1.0.0/24"]),
+                          remote=Endpoint("r", "2.2.2.2", "", ["10.2.0.0/24"]))
+        conn = VpnConnection(site_id=st.id, name="hc",
+                             params_json=json.dumps(prof.to_dict()),
+                             generated_config="set security ike proposal p")
+        db.add(conn); db.commit()
+        cid = conn.id
+
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        _login(c, "hcadm")
+        page = c.get(f"/connections/{cid}").text
+        assert "hidden by default" in page and "<details>" in page   # collapsed by default
+        assert c.get(f"/connections/{cid}/config").status_code == 200
+
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        _login(c, "hcop")
+        page = c.get(f"/connections/{cid}").text
+        assert "hidden by default" not in page          # no full-config block for operator
+        assert "Proposals" in page                       # summary still visible
+        assert c.get(f"/connections/{cid}/config").status_code == 403
+        assert c.get(f"/connections/{cid}/far-end").status_code == 403

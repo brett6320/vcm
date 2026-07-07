@@ -63,36 +63,44 @@
 </div>
 {% endif %}
 
+{% if user and user.role.value == 'admin' %}
 <div class="card">
-  <div style="display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap">
-    <h3 style="margin-right:auto">Configuration — both sides</h3>
-    {% if sides.is_junos %}
-    <span class="muted" style="font-size:.8rem">Format:</span>
-    <a class="btn small" href="?fmt=set"{% if fmt == 'set' %} style="opacity:.6"{% endif %}>Set commands</a>
-    <a class="btn small" href="?fmt=curly"{% if fmt == 'curly' %} style="opacity:.6"{% endif %}>Curly braces</a>
-    {% endif %}
-    <a class="btn small" href="/connections/{{ conn.id }}/config">Download</a>
-    <a class="btn small" href="/connections/{{ conn.id }}/far-end">Far-end (download)</a>
-  </div>
-  <div class="cfg-sxs">
-    <div>
-      <p class="muted">{{ sides.this_label }}</p>
-      <pre>{{ sides.this_config }}</pre>
+  <details>
+    <summary style="cursor:pointer"><strong>Configuration — both sides</strong>
+      <span class="muted">(hidden by default — click to show)</span></summary>
+    <div style="display:flex;align-items:baseline;gap:1rem;flex-wrap:wrap;margin-top:.6rem">
+      {% if sides.is_junos %}
+      <span class="muted" style="font-size:.8rem">Format:</span>
+      <a class="btn small" href="?fmt=set#cfg"{% if fmt == 'set' %} style="opacity:.6"{% endif %}>Set commands</a>
+      <a class="btn small" href="?fmt=curly#cfg"{% if fmt == 'curly' %} style="opacity:.6"{% endif %}>Curly braces</a>
+      {% endif %}
+      <a class="btn small" href="/connections/{{ conn.id }}/config">Download</a>
+      <a class="btn small" href="/connections/{{ conn.id }}/far-end">Far-end (download)</a>
     </div>
-    <div>
-      <p class="muted">{{ sides.far_label }}</p>
-      <pre>{{ sides.far_config }}</pre>
+    <div class="cfg-sxs" id="cfg">
+      <div>
+        <p class="muted">{{ sides.this_label }}</p>
+        <pre>{{ sides.this_config }}</pre>
+      </div>
+      <div>
+        <p class="muted">{{ sides.far_label }}</p>
+        <pre>{{ sides.far_config }}</pre>
+      </div>
     </div>
-  </div>
+  </details>
 </div>
 
 {% if sides.imported %}
 <div class="card">
-  <h3>Imported (original) configuration</h3>
-  <p class="muted">Preserved exactly as imported — never regenerated, so operations
-    can't trample it.{% if sides.is_junos %} Toggle format above.{% endif %}</p>
-  <pre>{{ sides.imported }}</pre>
+  <details>
+    <summary style="cursor:pointer"><strong>Imported (original) configuration</strong>
+      <span class="muted">(hidden by default — click to show)</span></summary>
+    <p class="muted" style="margin-top:.6rem">Preserved exactly as imported — never
+      regenerated, so operations can't trample it.</p>
+    <pre>{{ sides.imported }}</pre>
+  </details>
 </div>
+{% endif %}
 {% endif %}
 
 {% if interop_issues %}
@@ -157,7 +165,7 @@
   {% if peer %}
     <p>Paired with <a href="/connections/{{ peer.id }}">{{ peer.name }}</a>
       on <a href="/sites/{{ peer_site.id }}">{{ peer_site.name }}</a> — mirrored crypto.</p>
-    <a class="btn small" href="/connections/{{ peer.id }}/config">Download peer config</a>
+    {% if user and user.role.value == 'admin' %}<a class="btn small" href="/connections/{{ peer.id }}/config">Download peer config</a>{% endif %}
     <form method="post" action="/connections/{{ conn.id }}/unpair" style="display:inline"
           onsubmit="return confirm('Unpair from {{ peer.name }}? The peer connection is kept but unlinked.');">
       <button class="btn small danger">Unpair</button></form>
