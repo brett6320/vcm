@@ -328,6 +328,78 @@ def test_new_vendor_roundtrips():
         assert back.remote.public_ip == "203.0.113.1", v
 
 
+def test_tplink_er_generatable_and_untested():
+    from app.models import Vendor, generatable_vendors
+    assert Vendor.tplink_er in generatable_vendors()      # not import-only
+    assert not Vendor.tplink_er.import_only
+    # Left out of the tested set → label carries the "(untested)" marker.
+    assert not Vendor.tplink_er.tested
+    assert Vendor.tplink_er.label == "TP-Link ER (Omada) (untested)"
+
+
+def test_tplink_er_keyword_mapping_uses_omada_terminology():
+    from app.srx import proposals
+    er = proposals.vendor_options("tplink_er")
+    enc = {o["label"]: o["value"] for o in er["encryption"]}
+    assert enc.get("aes256") == "aes-256-cbc"             # Omada's own keyword
+    assert enc.get("aes128") == "aes-128-cbc"
+    # Omada gateways have no AEAD/GCM ciphers → not offered.
+    assert not any("gcm" in o["value"] for o in er["encryption"])
+    integ = {o["label"] for o in er["integrity"]}
+    assert integ == {"md5", "sha1", "sha256"}             # no sha384/sha512
+    dh = {o["label"]: o["value"] for o in er["dh_groups"]}
+    assert dh.get("dh14") == "14" and dh.get("dh16") == "16"
+    # No ECP (elliptic-curve) DH groups on Omada.
+    assert not any(o["value"] in ("19", "20", "21") for o in er["dh_groups"])
+
+
+def test_tplink_er_gui_output_and_roundtrip():
+    p = _mk_profile(vendor="tplink_er",
+                    p1={"encryption": "aes-256-cbc", "integrity": "sha256",
+                        "dh_group": "14", "ike_version": "ikev2"},
+                    p2={"encryption": "aes-256-cbc", "integrity": "sha256",
+                        "pfs_group": "14"})
+    cfg = generators.generate(p)
+    # GUI field-value output (Omada is controller-driven, like pfSense).
+    assert "Settings > VPN > IPsec Policy" in cfg
+    assert "Key Exchange Version : IKEv2" in cfg
+    # Combined proposal strings exactly as the Omada UI presents them.
+    assert "Proposal             : sha256-aes256-dh14" in cfg
+    assert "Proposal             : esp-sha256-aes256" in cfg
+    assert "Remote Gateway       : 203.0.113.1" in cfg
+    # Round-trips back to a tplink_er profile preserving key params.
+    assert importer.detect_vendor(cfg) == "tplink_er"
+    back = importer.import_config(cfg)
+    assert back.vendor == "tplink_er"
+    assert back.phase1.encryption == "aes-256-cbc"
+    assert back.phase1.integrity == "sha256"
+    assert back.phase1.dh_group == "14"
+    assert back.phase1.ike_version == "ikev2"
+    assert back.phase1.auth_method == "psk"          # Omada is PSK-only
+    assert back.phase2.pfs_group == "14"
+    assert back.remote.public_ip == "203.0.113.1"
+    assert back.local.protected_subnets == ["10.1.0.0/24"]
+    assert back.remote.protected_subnets == ["10.2.0.0/24"]
+
+
+def test_tplink_er_bgp_not_supported():
+    from app.srx.model import Bgp
+    p = _mk_profile(vendor="tplink_er",
+                    p1={"encryption": "aes-256-cbc", "integrity": "sha256", "dh_group": "14"},
+                    p2={"encryption": "aes-256-cbc", "integrity": "sha256", "pfs_group": "14"})
+    p.bgp = Bgp(enabled=True, local_as="65001", peer_as="65002", peer_ip="169.254.0.2")
+    out = generators.generate(p)
+    assert "not supported" in out.lower()            # ER has no BGP over tunnel
+
+
+def test_tplink_er_flags_unsupported_algorithms():
+    # AEAD/GCM + ECP DH aren't negotiable on Omada → generator flags them.
+    p = _mk_profile(vendor="tplink_er",
+                    p1={"encryption": "aes-256-gcm", "integrity": "sha384", "dh_group": "20"})
+    cfg = generators.generate(p)
+    assert "UNSUPPORTED" in cfg
+
+
 JUNOS_STRUCTURED = """# Model: srx300
 system { host-name FW-A; }
 security {
