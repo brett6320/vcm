@@ -44,22 +44,40 @@ async function registerPasskey(redirect) {
   else alert('Passkey registration failed');
 }
 
-async function authPasskey() {
-  const opts = await (await fetch('/mfa/passkey/options', { method: 'POST' })).json();
-  opts.challenge = b64urlToBuf(opts.challenge);
-  (opts.allowCredentials || []).forEach(c => c.id = b64urlToBuf(c.id));
-  const cred = await navigator.credentials.get({ publicKey: opts });
-  const body = {
-    id: cred.id, rawId: bufToB64url(cred.rawId), type: cred.type,
-    response: {
-      authenticatorData: bufToB64url(cred.response.authenticatorData),
-      clientDataJSON: bufToB64url(cred.response.clientDataJSON),
-      signature: bufToB64url(cred.response.signature),
-      userHandle: cred.response.userHandle ? bufToB64url(cred.response.userHandle) : null,
-    },
-  };
-  const r = await fetch('/mfa/passkey/verify',
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  if (r.ok) { const d = await r.json().catch(() => ({})); location.href = d.redirect || '/'; }
-  else alert('Passkey authentication failed');
+// Authenticate with a passkey. Pass {auto:true} to attempt it automatically on
+// page load — in that mode failures/cancellation are silent so the user can fall
+// back to the button or TOTP; an explicit click surfaces the error.
+async function authPasskey(cfg) {
+  cfg = cfg || {};
+  try {
+    const opts = await (await fetch('/mfa/passkey/options', { method: 'POST' })).json();
+    opts.challenge = b64urlToBuf(opts.challenge);
+    (opts.allowCredentials || []).forEach(c => c.id = b64urlToBuf(c.id));
+    const cred = await navigator.credentials.get({ publicKey: opts });
+    const body = {
+      id: cred.id, rawId: bufToB64url(cred.rawId), type: cred.type,
+      response: {
+        authenticatorData: bufToB64url(cred.response.authenticatorData),
+        clientDataJSON: bufToB64url(cred.response.clientDataJSON),
+        signature: bufToB64url(cred.response.signature),
+        userHandle: cred.response.userHandle ? bufToB64url(cred.response.userHandle) : null,
+      },
+    };
+    const r = await fetch('/mfa/passkey/verify',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (r.ok) { const d = await r.json().catch(() => ({})); location.href = d.redirect || '/'; return; }
+    if (!cfg.auto) alert('Passkey authentication failed');
+  } catch (e) {
+    if (!cfg.auto) alert('Passkey authentication failed or was cancelled');
+  }
+}
+
+// Auto-attempt on the MFA page when a passkey is enrolled (no click needed).
+function _maybeAutoPasskey() {
+  if (document.getElementById('passkey-auto')) authPasskey({ auto: true });
+}
+if (document.readyState === 'loading') {
+  window.addEventListener('DOMContentLoaded', _maybeAutoPasskey);
+} else {
+  _maybeAutoPasskey();
 }
