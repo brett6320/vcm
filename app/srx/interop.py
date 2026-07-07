@@ -24,31 +24,38 @@ def _cmp(field, near, far, *, near_is_import, remediate_extra=""):
             "severity": "mismatch", "message": msg, "remediation": rem}
 
 
-def proposal_rows(near: VpnProfile, far: VpnProfile) -> list[dict]:
-    """Structured side-by-side of the IKE/IPsec proposal parameters for both ends,
-    grouped by phase. Each row is {label, near, far, match}; `match` is False when
-    the two ends disagree (these values must be equal for the tunnel to come up)."""
-    p1n, p1f, p2n, p2f = near.phase1, far.phase1, near.phase2, far.phase2
+def proposal_rows(near: VpnProfile, far: VpnProfile | None = None) -> list[dict]:
+    """Structured side-by-side of the IKE/IPsec proposal parameters **as actually
+    configured on each node**, grouped by phase. Every parameter is shown, even
+    when the two ends agree. `far` is the real peer's profile, or None when there
+    is no configured peer (then only the near column is populated). Each row is
+    {label, near, far, match}; `match` is False only when both sides are present
+    and disagree (these must be equal for the tunnel to come up)."""
+    p1n, p2n = near.phase1, near.phase2
+    p1f = far.phase1 if far else None
+    p2f = far.phase2 if far else None
 
     def row(label, a, b):
-        return {"label": label, "near": str(a), "far": str(b), "match": str(a) == str(b)}
+        bs = "" if b is None else str(b)
+        return {"label": label, "near": str(a), "far": bs,
+                "match": (b is None) or (str(a) == bs)}
 
     return [
         {"section": "Phase 1 (IKE)", "rows": [
-            row("IKE version", p1n.ike_version, p1f.ike_version),
-            row("Encryption", p1n.encryption, p1f.encryption),
-            row("Integrity", p1n.integrity, p1f.integrity),
-            row("DH group", p1n.dh_group, p1f.dh_group),
-            row("Auth method", p1n.auth_method, p1f.auth_method),
-            row("Lifetime (s)", p1n.lifetime_seconds, p1f.lifetime_seconds),
-            row("DPD (s)", p1n.dpd_seconds, p1f.dpd_seconds),
+            row("IKE version", p1n.ike_version, getattr(p1f, "ike_version", None)),
+            row("Encryption", p1n.encryption, getattr(p1f, "encryption", None)),
+            row("Integrity", p1n.integrity, getattr(p1f, "integrity", None)),
+            row("DH group", p1n.dh_group, getattr(p1f, "dh_group", None)),
+            row("Auth method", p1n.auth_method, getattr(p1f, "auth_method", None)),
+            row("Lifetime (s)", p1n.lifetime_seconds, getattr(p1f, "lifetime_seconds", None)),
+            row("DPD (s)", p1n.dpd_seconds, getattr(p1f, "dpd_seconds", None)),
         ]},
         {"section": "Phase 2 (IPsec)", "rows": [
-            row("Protocol", p2n.protocol, p2f.protocol),
-            row("Encryption", p2n.encryption, p2f.encryption),
-            row("Integrity", p2n.integrity, p2f.integrity),
-            row("PFS group", p2n.pfs_group, p2f.pfs_group),
-            row("Lifetime (s)", p2n.lifetime_seconds, p2f.lifetime_seconds),
+            row("Protocol", p2n.protocol, getattr(p2f, "protocol", None)),
+            row("Encryption", p2n.encryption, getattr(p2f, "encryption", None)),
+            row("Integrity", p2n.integrity, getattr(p2f, "integrity", None)),
+            row("PFS group", p2n.pfs_group, getattr(p2f, "pfs_group", None)),
+            row("Lifetime (s)", p2n.lifetime_seconds, getattr(p2f, "lifetime_seconds", None)),
         ]},
     ]
 

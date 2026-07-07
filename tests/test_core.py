@@ -2217,3 +2217,8 @@ def test_proposal_rows_side_by_side():
     p1_integ = groups[0]["rows"][2]
     assert p1_integ["label"] == "Integrity" and p1_integ["match"] is False
     assert p1_integ["near"] == "sha256" and p1_integ["far"] == "sha384"
+
+    # No peer -> far column empty, rows count as matching (nothing to compare).
+    solo = proposal_rows(a, None)
+    r = solo[0]["rows"][1]
+    assert r["far"] == "" and r["match"] is True

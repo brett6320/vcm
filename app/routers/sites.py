@@ -538,18 +538,24 @@ def connection_detail(conn_id: int, request: Request, fmt: str = "set",
         m.vendor = far_vendor
         suggest.fill_ike_ids(m)
         far_raw = generators.generate(m)
-    # Interop check + structured proposal comparison between the two ends.
-    far_profile = _profile(peer) if peer else mirror
+    # Interop check + structured proposals: each column is the node's ACTUAL config
+    # (the real peer, or None when there's no configured peer — no fabricated mirror).
+    peer_profile = _profile(peer) if peer else None
+    far_profile = peer_profile if peer_profile else mirror
     interop_issues = interop.mismatches(
-        profile, far_profile, near_is_import=(conn.source == "imported")) if peer else []
-    proposal_groups = interop.proposal_rows(profile, far_profile)
+        profile, peer_profile, near_is_import=(conn.source == "imported")) if peer else []
+    proposal_groups = interop.proposal_rows(profile, peer_profile)
+    # Config panes: ensure BGP is included in each side (append if the text omits it).
+    this_raw = _imported_config(profile, conn.generated_config or "")
+    far_raw = _imported_config(far_profile, far_raw)
     sides = {
         "this_label": f"{conn.site.name} / {conn.name} ({conn.site.vendor.label})",
-        "this_config": _fmt_config(this_vendor, conn.generated_config, fmt),
+        "this_config": _fmt_config(this_vendor, this_raw, fmt),
         "far_label": far_label,
         "far_config": _fmt_config(far_vendor, far_raw, fmt),
         "imported": conn.imported_config or None,   # verbatim original, never reformatted
         "is_junos": this_vendor == "juniper_srx",
+        "has_peer": bool(peer),
     }
     return render(request, "connection.html", conn=conn, site=conn.site,
                   profile=profile.to_dict(), warnings=all_warnings(profile), peer=peer,
