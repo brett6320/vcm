@@ -79,7 +79,7 @@
 </div>
 
 {% if user.role.value == 'admin' %}
-<div class="card">
+<div class="card collapse-default">
   <h3>Create CA</h3>
   <form method="post" action="/pki/ca">
     <div class="row">
@@ -128,7 +128,7 @@
   <p class="muted">CA private keys are AES-256-GCM encrypted at rest and never exported.</p>
 </div>
 
-<div class="card">
+<div class="card collapse-default">
   <h3>Import existing CA</h3>
   <form method="post" action="/pki/ca/import" enctype="multipart/form-data">
     <div class="row">
@@ -156,7 +156,7 @@
     encrypted at rest. If linked to an existing parent CA (issuer match), the hierarchy updates.</p>
 </div>
 
-<div class="card">
+<div class="card collapse-default">
   <h3>Import leaf certificate <span class="muted">(observe only)</span></h3>
   <form method="post" action="/pki/cert/import" enctype="multipart/form-data">
     <label>Upload file <span class="muted">— PEM or DER (.pem/.crt/.cer/.der)</span></label>
@@ -170,7 +170,7 @@
 </div>
 {% endif %}
 
-<div class="card">
+<div class="card collapse-default">
   <h3>Sign appliance CSR</h3>
   <form method="post" action="/pki/sign" enctype="multipart/form-data">
     <label>Issuing CA</label>
