@@ -51,6 +51,11 @@ short-lived challenge stored in `webauthn_challenges`:
   updates the sign count. On success it returns a JSON `redirect` to the
   remembered next page.
 
+On the **MFA step** (`mfa.html`), when the user has a passkey enrolled the page
+**auto-attempts the passkey assertion** on load (a hidden `#passkey-auto` marker
+drives `webauthn.js`, showing *"Waiting for your passkey…"*), with a **Use
+passkey** button to retry and the TOTP form still available as a fallback.
+
 A user may register several passkeys (`webauthn_credentials` is one-to-many).
 The passkey endpoints speak JSON (see `_JSON_PREFIXES` in `app/main.py`).
 
@@ -105,4 +110,27 @@ Server-side (`app/security/sessions.py`): a random `token_urlsafe(32)` id, a TTL
 from `VCM_SESSION_TTL_MINUTES`, an `mfa_ok` flag, the client IP, and the
 remembered `next_url`. Expired sessions are deleted on read. A restore operation
 clears the entire session table, forcing everyone to re-authenticate.
+
+## Audit log & tamper-evident hash chain
+
+Every meaningful action is recorded in `audit_log` (user, action, detail,
+resolved client IP) via `audit()` in `app/security/deps.py`. Each row also carries
+a **SHA-256 hash chain** (`app/security/audit_chain.py`): `entry_hash =
+sha256(prev_hash + canonical(ts, username, action, detail, ip))`, where
+`prev_hash` links to the previous row's `entry_hash` (the first row seeds from a
+zero genesis). Editing, deleting, or reordering any existing entry breaks the
+chain and is pinpointed to the first bad row.
+
+Admins verify the chain from **Admin → Audit log**, which shows an overall
+**valid/broken** summary plus a per-line badge (each row's `entry_hash` is
+recomputed and its `prev_hash` link checked independently). The nullable hash
+columns are added by the additive startup schema sync and a **backfill** populates
+historical rows so the chain is continuous. The same check is exposed to
+automation at `GET /api/audit/verify` (admin scope) — see
+[`api.md`](api.md#get-apiauditverify).
+
+> **Caveat.** The chain detects casual tampering but does **not** stop an attacker
+> with full DB write access, who could recompute the whole chain. Stronger
+> integrity requires anchoring the head hash to an external append-only store
+> (tracked as a follow-up).
 </content>
