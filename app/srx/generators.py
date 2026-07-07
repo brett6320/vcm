@@ -466,6 +466,116 @@ def _secs(seconds: int) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# TP-Link ER series (Omada-managed gateways) — Controller GUI field values.
+# Omada gateways are configured from the controller/web UI (there is no useful
+# device CLI for the IPsec policy), so — like the pfSense generator — we emit the
+# exact field values an operator enters under Settings > VPN > IPsec Policy.
+#
+# Constraints of the platform (reflected below):
+#   * Site-to-site IPsec is POLICY-BASED (Local Networks / Remote Subnets); there
+#     is no route-based/VTI tunnel interface.
+#   * Authentication is PRE-SHARED-KEY only (no certificate auth for site-to-site).
+#   * No AEAD/GCM ciphers and no ECP (elliptic-curve) DH groups.
+#   * No BGP/dynamic routing over the tunnel.
+# --------------------------------------------------------------------------- #
+def _er_kw(table: dict, canon: str) -> tuple[str, bool]:
+    """Return (Omada keyword, supported?) for a canonical algorithm id. Falls back
+    to the canonical id (flagged unsupported) when Omada can't negotiate it."""
+    algo = table.get((canon or "").lower())
+    kw = algo.vendor.get("tplink_er") if algo else None
+    return (kw, True) if kw else (canon, False)
+
+
+def gen_tplink_er(p: VpnProfile) -> str:
+    n = p.name
+    ikev2 = p.phase1.ike_version == "ikev2"
+    unsupported: list[str] = []
+
+    def kw(table, canon, label):
+        k, ok = _er_kw(table, canon)
+        if not ok:
+            unsupported.append(f"{label} '{canon}' is not supported by Omada gateways")
+        return k
+
+    enc1 = kw(ENCRYPTION, p.phase1.encryption, "Phase-1 encryption")
+    int1 = kw(INTEGRITY, p.phase1.integrity, "Phase-1 authentication")
+    dh1 = kw(DH_GROUPS, p.phase1.dh_group, "Phase-1 DH group")
+    enc2 = kw(ENCRYPTION, p.phase2.encryption, "Phase-2 encryption")
+    int2 = kw(INTEGRITY, p.phase2.integrity, "Phase-2 authentication")
+    pfs = kw(DH_GROUPS, p.phase2.pfs_group, "PFS DH group")
+
+    # Combined proposal strings exactly as the Omada UI presents them.
+    p1_prop = f"{int1}-{enc1}-{dh1}"
+    p2_prop = f"esp-{int2}-{enc2}"
+
+    def _id_line(label: str, ident: str) -> list[str]:
+        # Omada ID Type is either "IP Address" or "Name" (FQDN/string).
+        if ident and addr_kind(ident) == "ip":
+            return [f"  {label} Type        : IP Address",
+                    f"  {label}             : {ident}"]
+        if ident:
+            return [f"  {label} Type        : Name",
+                    f"  {label}             : {ident}"]
+        return [f"  {label} Type        : IP Address (local WAN IP)"]
+
+    wan = p.wan_interface or "WAN"
+    rkind = addr_kind(p.remote.public_ip)
+    rgw = p.remote.public_ip if rkind != "dynamic" else "(dynamic peer)"
+    local_nets = ", ".join(p.local.protected_subnets or ["0.0.0.0/0"])
+    remote_nets = ", ".join(p.remote.protected_subnets or ["0.0.0.0/0"])
+
+    out = [f"# ---- TP-Link ER (Omada) IPsec VPN — Controller GUI "
+           f"(Settings > VPN > IPsec Policy): {n} ----",
+           "[IPsec Policy]",
+           "  Status               : Enabled",
+           "  Mode                 : Site-to-Site",
+           f"  IPsec Policy Name    : {n}",
+           f"  Key Exchange Version : {'IKEv2' if ikev2 else 'IKEv1'}",
+           f"  WAN                  : {wan}",
+           f"  Remote Gateway       : {rgw}",
+           f"  Local Networks       : {local_nets}",
+           f"  Remote Subnets       : {remote_nets}",
+           "  Pre-Shared Key       : <set on device>"]
+    if p.phase1.auth_method == "certificate":
+        out.append("  # NOTE: Omada site-to-site IPsec is PRE-SHARED-KEY only — "
+                   "certificate auth is not supported; a PSK is used instead.")
+    if rkind == "dynamic":
+        out += ["  Negotiation Mode     : Responder Mode",
+                "  # Dynamic peer (no fixed IP): set this end as Responder and match "
+                "by Remote ID (Name)."]
+    else:
+        out.append("  Negotiation Mode     : Initiator Mode")
+    out += _id_line("Local ID", p.local.id)
+    out += _id_line("Remote ID", p.remote.id)
+    out += ["",
+            "[Phase-1 (IKE) Proposal]",
+            f"  Proposal             : {p1_prop}",
+            f"  Encryption Algorithm : {enc1}",
+            f"  Authentication       : {int1}",
+            f"  DH Group             : {dh1}"]
+    if not ikev2:
+        out.append("  Exchange Mode        : "
+                   + ("Aggressive" if rkind in ("dynamic", "fqdn") else "Main"))
+    out += [f"  IKE Lifetime         : {p.phase1.lifetime_seconds}",
+            "",
+            "[Phase-2 (IPsec) Proposal]",
+            f"  Proposal             : {p2_prop}",
+            f"  Encryption Algorithm : {enc2}",
+            f"  Authentication       : {int2}",
+            "  Encapsulation Mode   : Tunnel",
+            f"  PFS                  : {pfs}",
+            f"  IPsec Lifetime       : {p.phase2.lifetime_seconds}"]
+    if unsupported:
+        out.append("")
+        out.append("# ==================== OMADA COMPATIBILITY ====================")
+        for msg in unsupported:
+            out.append(f"#  [UNSUPPORTED] {msg} — pick an Omada-supported value "
+                       "(CBC AES/3DES/DES, MD5/SHA1/SHA256, DH1/2/5/14/15/16).")
+        out.append("# =============================================================")
+    return _annotate(p, "\n".join(out))
+
+
+# --------------------------------------------------------------------------- #
 # Fortinet (FortiOS CLI)
 # --------------------------------------------------------------------------- #
 def gen_fortinet(p: VpnProfile) -> str:
@@ -687,6 +797,7 @@ _REGISTRY = {
     "cisco_firepower": gen_cisco_firepower,
     "strongswan": gen_strongswan,
     "mikrotik": gen_mikrotik,
+    "tplink_er": gen_tplink_er,
     "aws": lambda p: _cloud_note("AWS", p),
     "azure": lambda p: _cloud_note("Azure", p),
 }

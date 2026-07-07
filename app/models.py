@@ -94,6 +94,7 @@ class Vendor(str, enum.Enum):
     palo_alto = "palo_alto"
     strongswan = "strongswan"
     mikrotik = "mikrotik"
+    tplink_er = "tplink_er"
     aws = "aws"
     azure = "azure"
 
@@ -123,6 +124,7 @@ _VENDOR_LABELS = {
     "palo_alto": "Palo Alto",
     "strongswan": "strongSwan",
     "mikrotik": "MikroTik",
+    "tplink_er": "TP-Link ER (Omada)",
     "aws": "AWS VPN Gateway",
     "azure": "Azure VPN Gateway",
 }

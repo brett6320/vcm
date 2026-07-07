@@ -226,6 +226,13 @@ def extract_vpn_sections(text: str, vendor: str) -> str:
     if vendor == "cradlepoint":
         keep = [l.rstrip() for l in text.splitlines() if "vpn/tunnels" in l]
         return "\n".join(keep) + ("\n" if keep else "")
+    if vendor == "tplink_er":
+        # GUI field block: keep the section headers, the labelled "key : value"
+        # lines, and our own comment/banner lines; drop anything unrelated.
+        keep = [l.rstrip() for l in text.splitlines()
+                if l.strip().startswith("[") or l.startswith("  ")
+                or "TP-Link ER" in l or l.lstrip().startswith("#")]
+        return "\n".join(keep) + ("\n" if keep else "")
     if vendor in ("pfsense", "strongswan"):
         return _extract_brace_blocks(text, ("connections", "secrets"))
     if vendor == "mikrotik":
@@ -301,6 +308,8 @@ def detect_vendor(text: str) -> str:
     low = text.lower()
     if is_pfsense_backup(text):
         return "pfsense"
+    if "tp-link er" in low or ("omada" in low and "ipsec policy" in low):
+        return "tplink_er"
     if ("virtual private gateway" in low or "amazon web services" in low
             or "ipsec tunnel #" in low):
         return "aws"
@@ -435,6 +444,8 @@ def import_site(text: str, name: str | None = None) -> dict:
         profile.vendor = "strongswan"
     elif vendor == "mikrotik":
         profile = _import_mikrotik(text, name)
+    elif vendor == "tplink_er":
+        profile = _import_tplink_er(text, name)
     elif vendor == "aws":
         profile = _import_aws(text, name)
     elif vendor == "azure":
@@ -1143,6 +1154,66 @@ def _import_mikrotik(text: str, name: str | None) -> VpnProfile:
     if m := re.search(r"policy add[^\n]*dst-address=(\S+)", text):
         remote.protected_subnets = [m.group(1)]
     return VpnProfile(name=inferred or "imported-mikrotik", vendor=v, local=local,
+                      remote=remote, phase1=p1, phase2=p2)
+
+
+def _import_tplink_er(text: str, name: str | None) -> VpnProfile:
+    """Parse the TP-Link ER (Omada) GUI field-value block our generator emits.
+    Omada site-to-site IPsec is policy-based and PSK-only, so auth is fixed to psk.
+    Best-effort: unrecognised fields fall back to profile defaults."""
+    v = "tplink_er"
+    p1, p2 = Phase1(), Phase2()
+    local, remote = Endpoint(name="local"), Endpoint(name="remote")
+    p1.auth_method = "psk"  # Omada site-to-site IPsec has no certificate option
+    inferred = name
+
+    if m := re.search(r"IPsec Policy Name\s*:\s*(\S+)", text):
+        inferred = inferred or m.group(1)
+    if m := re.search(r"Key Exchange Version\s*:\s*IKEv(\d)", text):
+        p1.ike_version = "ikev2" if m.group(1) == "2" else "ikev1"
+    if m := re.search(r"Remote Gateway\s*:\s*(\S+)", text):
+        gw = m.group(1)
+        if not gw.startswith("("):        # skip "(dynamic peer)" placeholder
+            remote.public_ip = gw
+    if m := re.search(r"Local Networks\s*:\s*(.+)", text):
+        local.protected_subnets = [s.strip() for s in m.group(1).split(",") if s.strip()]
+    if m := re.search(r"Remote Subnets\s*:\s*(.+)", text):
+        remote.protected_subnets = [s.strip() for s in m.group(1).split(",") if s.strip()]
+    # IKE IDs are only emitted when a Name/IP value line follows the Type line.
+    if m := re.search(r"Local ID\s+:\s*(\S+)", text):
+        local.id = m.group(1)
+    if m := re.search(r"Remote ID\s+:\s*(\S+)", text):
+        remote.id = m.group(1)
+
+    # Scope algorithm parsing to each proposal block (both use the same labels).
+    p1_sec = ""
+    p2_sec = ""
+    if "[Phase-1" in text:
+        p1_sec = text.split("[Phase-1", 1)[1].split("[Phase-2", 1)[0]
+    if "[Phase-2" in text:
+        p2_sec = text.split("[Phase-2", 1)[1]
+
+    if m := re.search(r"Encryption Algorithm\s*:\s*(\S+)", p1_sec):
+        p1.encryption = _reverse(ENCRYPTION, v, m.group(1))
+    if m := re.search(r"Authentication\s*:\s*(\S+)", p1_sec):
+        p1.integrity = _reverse(INTEGRITY, v, m.group(1))
+    if m := re.search(r"DH Group\s*:\s*(\S+)", p1_sec):
+        p1.dh_group = _reverse(DH_GROUPS, v, m.group(1))
+    if m := re.search(r"IKE Lifetime\s*:\s*(\d+)", p1_sec):
+        p1.lifetime_seconds = int(m.group(1))
+
+    if m := re.search(r"Encryption Algorithm\s*:\s*(\S+)", p2_sec):
+        p2.encryption = _reverse(ENCRYPTION, v, m.group(1))
+    if m := re.search(r"Authentication\s*:\s*(\S+)", p2_sec):
+        p2.integrity = _reverse(INTEGRITY, v, m.group(1))
+    if m := re.search(r"PFS\s*:\s*(\S+)", p2_sec):
+        pfs = m.group(1)
+        if pfs.lower() != "none":
+            p2.pfs_group = _reverse(DH_GROUPS, v, pfs)
+    if m := re.search(r"IPsec Lifetime\s*:\s*(\d+)", p2_sec):
+        p2.lifetime_seconds = int(m.group(1))
+
+    return VpnProfile(name=inferred or "imported-tplink-er", vendor=v, local=local,
                       remote=remote, phase1=p1, phase2=p2)
 
 
