@@ -26,8 +26,8 @@
     {% for r in rows %}
     {% set st = statuses.get(r.id) if statuses else None %}
     <tr{% if st and not st.ok %} class="sev-broken"{% endif %}>
-        <td>{% if st and st.ok %}<span class="badge badge-ok" title="valid">&#10003; valid</span>
-            {% elif st %}<span class="badge badge-critical" title="{{ st.reason }}">&#10007; broken</span>
+        <td class="audit-valid">{% if st and st.ok %}<span class="ok" title="valid">&#10003;</span>
+            {% elif st %}<span class="bad" title="{{ st.reason }}">&#10007;</span>
             {% endif %}</td>
         <td class="muted">{{ r.ts.strftime('%Y-%m-%d %H:%M:%S') }}</td>
         <td>{{ r.username or '—' }}</td><td>{{ r.action }}</td>
