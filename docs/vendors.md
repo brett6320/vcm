@@ -20,12 +20,36 @@ validated end-to-end; the rest are best-effort and show *"(untested)"* in the UI
 | `fortinet` | Fortinet | ✅ | ✅ | — | FortiOS CLI |
 | `palo_alto` | Palo Alto | ✅ | ✅ | — | PAN-OS `set` CLI |
 | `cisco_firepower` | Cisco Firepower | ✅ | ✅ | — | FlexConfig / ASA-style |
+| `tplink_er` | TP-Link ER (Omada) | ✅ | ✅ | — | Omada controller GUI field values |
 | `aws` | AWS VPN Gateway | ❌ (note only) | ✅ | — | import-only |
 | `azure` | Azure VPN Gateway | ❌ (note only) | ✅ | — | import-only |
 
 `generatable_vendors()` returns everything except `aws`/`azure`. Generating for
 an import-only vendor returns a note telling you to import the provider config
 and generate the far end instead.
+
+The `Vendor.label` property appends *"(untested)"* to every vendor except the
+two in `_TESTED_VENDORS` (`juniper_srx`, `cradlepoint`), and `Vendor.import_only`
+is `True` for the `_IMPORT_ONLY_VENDORS` set (`aws`, `azure`).
+
+### TP-Link ER (Omada) — platform constraints
+
+The `tplink_er` generator (`gen_tplink_er`) emits the exact field values an
+operator types under **Settings → VPN → IPsec Policy** in the Omada controller
+(there is no useful device CLI), much like the pfSense generator. Because of the
+platform, the generator is deliberately restrictive:
+
+- **PSK only** — site-to-site IPsec has no certificate option; a `certificate`
+  auth method is downgraded to PSK with an inline note.
+- **Policy-based only** — Local Networks / Remote Subnets, no route-based/VTI
+  tunnel interface.
+- **No AEAD/GCM ciphers and no ECP (elliptic-curve) DH groups** — only CBC
+  AES/3DES/DES, MD5/SHA1/SHA256 and DH groups 1/2/5/14/15/16 negotiate; anything
+  else is flagged in an `OMADA COMPATIBILITY` block listing each unsupported
+  choice.
+- **No BGP/dynamic routing** over the tunnel.
+
+Untested end-to-end — treat the output as a best-effort starting point.
 
 ## The vendor-neutral profile
 
@@ -74,13 +98,31 @@ traffic selectors:
   `st0` routing; **no** proxy-identity/traffic-selectors are emitted (a note
   explains why).
 - **Policy-based peers** — pfSense/strongSwan, AWS, Azure, Cisco, MikroTik, Digi,
-  Cradlepoint — need selectors: a single subnet pair emits a classic
-  `proxy-identity`; multiple pairs emit numbered `traffic-selector ts0/ts1/…`
-  stanzas. An inline note states they **must match** the peer's Phase 2.
+  Cradlepoint, TP-Link ER (Omada) — need selectors: a single subnet pair emits a
+  classic `proxy-identity`; multiple pairs emit numbered `traffic-selector
+  ts0/ts1/…` stanzas. An inline note states they **must match** the peer's Phase 2.
 - **Unspecified** far end — selectors are included as a safe default.
 
 IKE identity type is chosen by the ID's shape: a DN (`CN=…`) →
 `distinguished-name`, an IP → `inet`, otherwise `hostname` (FQDN).
+
+## Endpoint address kinds (static / DDNS / dynamic)
+
+`addr_kind()` classifies each endpoint's public address as **`ip`** (a literal
+IPv4/IPv6), **`fqdn`** (a DNS/DDNS hostname), or **`dynamic`** (blank — the peer
+has no fixed address, so this side must be the responder / accept `%any`). Every
+generator adapts:
+
+- A **DDNS hostname** is placed straight in the peer/remote-gateway field where
+  the platform re-resolves it (SRX `dynamic hostname`, FortiOS `set type ddns`,
+  pfSense/MikroTik/PAN-OS bare hostname, Omada Remote ID "Name"), and IKEv1 +
+  FQDN/dynamic peers switch to **aggressive mode** where required.
+- A **dynamic** (blank) peer forces responder/passive matching by IKE ID
+  (`%any`, `0.0.0.0`, `start_action = trap`, Omada "Responder Mode", etc.).
+- **AWS/Azure caveat** — `all_warnings()` (`app/srx/model.py`) emits a `broken`
+  warning when the endpoint facing an AWS/Azure gateway (the on-prem *customer
+  gateway*) is dynamic/DDNS: those clouds **require a static public IP** and do
+  not accept a hostname.
 
 ## Defaults, IKE-ID suggestion, BGP inference
 
@@ -118,11 +160,16 @@ Connection names are slugified to safe config identifiers (letters, digits,
 
 ## Import
 
-`POST /sites/import` (paste or upload). `import_site()` in `app/srx/importer.py`:
+`POST /sites/import` (paste or upload). Uploads are read by
+`config_from_upload()` first: a **ZIP backup** (detected by the `PK` magic or a
+`.zip` name — e.g. a **Digi Remote Manager ZIP backup**) is unpacked to its
+config-bearing member, otherwise the bytes are decoded as text. `import_site()`
+in `app/srx/importer.py` then:
 
 1. **Detects the vendor** from tell-tale markers (`detect_vendor`).
 2. Parses one or more connections into `VpnProfile`s, reverse-mapping vendor
-   keywords back to canonical algorithm ids.
+   keywords back to canonical algorithm ids, and **captures BGP-over-tunnel and
+   tunnel-interface info** where the source config carries it.
 3. **Extracts only VPN-relevant sections** (`extract_vpn_sections`) so unrelated —
    possibly sensitive — device state is not persisted.
 4. **Redacts secrets** before storage: SRX `pre-shared-key`/`encrypted-password`,
@@ -135,10 +182,25 @@ Notable importers:
 - **pfSense `config.xml` backup** — one connection per `<phase1>`, joined to its
   `<phase2>` entries by `ikeid` for protected subnets; only the `<ipsec>` section
   is used.
+- **Digi** — from a pasted CLI config or an unpacked ZIP backup.
+- **TP-Link ER (Omada)** — parses the GUI field-value block the generator emits;
+  auth is fixed to `psk` (Omada site-to-site has no certificate option).
 - **AWS / Azure** — best-effort parse of the provider's download; flagged
   `needs_review` because the sample proposal values may not match the tunnel's
   real policy. BGP ASNs/neighbor are extracted where present.
 
 Imports that can't parse endpoint details are flagged `needs_review` with a note
 so the shown parameters aren't trusted blindly.
+
+### Re-import: update-or-duplicate, with a diff
+
+When an import matches an existing site (same name/hostname, or a shared local
+public IP on any connection — `_match_import_site`), VCM shows a **side-by-side
+before/after diff** and lets you choose **update** (upsert connections in place,
+matched by name) or **duplicate** (create a new site). The full original device
+config is preserved verbatim in `VpnConnection.imported_config` and is **never
+regenerated or overwritten**. When an importer's excerpt omits BGP that the
+profile captured, `_imported_config()` appends the generated BGP so **BGP /
+prefix-lists survive** the import/update/diff round-trip rather than silently
+dropping out.
 </content>

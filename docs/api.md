@@ -74,19 +74,25 @@ Tokens are created and managed from your **profile** page (`GET /profile`,
      (see [Scopes & permissions](#scopes--permissions)).
    - **Expires in days** — optional; leave blank for a token that never
      expires, or enter a positive integer number of days.
+   - **Allowed source IPs / CIDRs** — optional; a comma/space/newline-separated
+     list of CIDRs restricting where *this* token may be used (see
+     [The IP-allowlist caveat](#the-ip-allowlist-caveat)). Blank = no per-token
+     restriction. Each entry is validated with `ipaddress.ip_network` on submit.
 3. Submit **Create API token**. The plaintext token is then displayed **once**
    in a highlighted box with the warning *"copy it now; it won't be shown
    again."* Copy it immediately — after you navigate away it cannot be
    retrieved, only revoked and replaced.
 
-The token table lists each token's **name, prefix, scope, created date, last
-used, expiry and status** (`active` / `expired` / `revoked`), with a **Revoke**
-button per non-revoked token. Revocation is immediate and permanent.
+The token table lists each token's **name, prefix, scope, allowed IPs (`any`
+when unrestricted), created date, last used, expiry and status** (`active` /
+`expired` / `revoked`), with a **Revoke** button per non-revoked token.
+Revocation is immediate and permanent.
 
 Behind the UI: `POST /profile/tokens/create` validates the label and scope,
 rejects a scope above your role cap, computes the optional `expires_at`,
-generates the plaintext, stores only its hash + prefix, and audits
-`apitoken.create` (label + scope + prefix — never the secret).
+validates any `allowed_ips` CIDRs, generates the plaintext, stores only its hash
++ prefix (+ the IP rule), and audits `apitoken.create` (label + scope + prefix,
+plus `ips=…` when set — never the secret).
 `POST /profile/tokens/{id}/revoke` sets `revoked = True` and audits
 `apitoken.revoke`.
 
@@ -151,6 +157,16 @@ Practical consequences:
 - A `403 "Source IP … not allowed"` is distinct from a `403` for **insufficient
   scope** — check the `detail` string to tell them apart.
 
+### Per-token IP restriction
+
+Beyond the global allowlist, a token may carry its own `allowed_ips` list (set at
+creation). After the global check and successful token lookup, if the token has a
+per-token CIDR list and the resolved client IP is **not** in it, the request is
+rejected with a JSON **403** — `{"detail": "Source IP not allowed for this
+token"}`. This scopes a token to, say, one CI runner's egress range even if the
+global allowlist is broader. An empty/NULL list means no per-token restriction
+(the global allowlist still applies).
+
 ---
 
 ## Error responses
@@ -169,7 +185,8 @@ one) rather than an HTML page or a login redirect. The body shape is always:
 | `401`  | `Invalid or revoked token`                                   | Token doesn't match any stored hash, or has been revoked. |
 | `401`  | `Token has expired`                                          | `expires_at` is in the past. |
 | `401`  | `Token owner is inactive`                                    | The owning user was disabled. |
-| `403`  | `Source IP <ip> not allowed`                                 | Caller IP is outside the allowlist (checked before the token). |
+| `403`  | `Source IP <ip> not allowed`                                 | Caller IP is outside the **global** allowlist (checked before the token). |
+| `403`  | `Source IP not allowed for this token`                       | Valid token, but the caller IP is outside the token's own `allowed_ips`. |
 | `403`  | `Token scope '<have>' is insufficient; '<need>' scope required` | Valid token, but its scope is below the endpoint's requirement. |
 | `404`  | `Site not found` / `Token not found`                         | Referenced resource doesn't exist (or, for tokens, isn't yours). |
 
@@ -277,7 +294,8 @@ curl -sS https://vcm.example.com/api/sites/1 \
       "needs_review": false,
       "review_note": null,
       "peer_connection_id": 25,
-      "params": { "phase1": "…", "phase2": "…", "endpoints": "…" },
+      "params": { "phase1": "…", "phase2": "…", "endpoints": "…", "psk": "" },
+      "psk_set": true,
       "warnings": [
         { "field": "phase1.dh_group", "severity": "weak", "message": "DH group 2 is weak" }
       ],
@@ -290,6 +308,13 @@ curl -sS https://vcm.example.com/api/sites/1 \
 Each connection (`_conn_public`) includes the vendor-neutral `params`
 (the `VpnProfile`), structured crypto `warnings`, and the rendered
 `generated_config` (may be `null` for import-only vendors).
+
+> **PSKs are never exposed.** The pre-shared key is blanked in `params.psk` and a
+> boolean **`psk_set`** flag reports only whether one is configured. The
+> `generated_config` is additionally scrubbed (`_redact_config`) — the stored PSK
+> plus any `pre-shared-key` / `psksecret` / `secret = "…"` patterns are replaced
+> with `<redacted>` before the config leaves the API. As with private keys, no
+> endpoint ever returns key material or CA private keys.
 
 ### GET /api/certificates
 
@@ -518,6 +543,9 @@ tokens.
   **private key**. `pki/tree` (even with `include_pem=true`) and
   `certificates` return public certificate metadata / PEM only; private keys stay
   KEK-encrypted at rest and are never serialised by any route.
+- **PSKs are never exposed.** VPN pre-shared keys are redacted from both the
+  connection `params` (`psk` blanked, `psk_set` boolean only) and the returned
+  `generated_config`.
 - **Scope is least-privilege.** Prefer `read` tokens for monitoring/inventory;
   use `write` only where credential rotation is needed and `admin` only for the
   audit log. The role→scope cap prevents privilege escalation at creation time.

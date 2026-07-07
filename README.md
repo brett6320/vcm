@@ -22,11 +22,11 @@ WebAuthn passkey), role-based access control, a source-IP allowlist, and a full
 audit log.
 
 > **Vendor support at a glance.** Config is generated for Juniper SRX, Digi,
-> Cradlepoint, pfSense, Cisco Firepower/FTD, Fortinet, Palo Alto, strongSwan and
-> MikroTik. AWS and Azure VPN gateways are **import-only** (you import their
-> provider-managed config and generate the on-prem far end). Only **Juniper SRX**
-> and **Cradlepoint** are validated end-to-end; the rest are generated
-> best-effort and labelled *"(untested)"* in the UI. See
+> Cradlepoint, pfSense, Cisco Firepower/FTD, Fortinet, Palo Alto, strongSwan,
+> MikroTik and TP-Link ER (Omada). AWS and Azure VPN gateways are **import-only**
+> (you import their provider-managed config and generate the on-prem far end).
+> Only **Juniper SRX** and **Cradlepoint** are validated end-to-end; the rest are
+> generated best-effort and labelled *"(untested)"* in the UI. See
 > [`docs/vendors.md`](docs/vendors.md).
 
 ---
@@ -79,18 +79,48 @@ audit log.
   and revoke their other sessions from their profile.
 - **Full audit log** — every meaningful action (logins, MFA events, PKI/VPN/user
   changes, backups) is recorded with user, action, detail and resolved client IP.
+- **Tamper-evident audit log** — each entry is chained with a SHA-256 hash
+  (`entry_hash = sha256(prev_hash + canonical(row))`); the admin audit page shows
+  an overall and per-line **valid/broken** badge, with a **Verify** action (also
+  exposed at `GET /api/audit/verify`). Detects edits, deletions and reordering.
+
+### REST API & tokens
+- **JSON REST surface** under `/api/**` for automation (CI, monitoring,
+  inventory), authenticated with **bearer API tokens** — not the session cookie.
+- **Scoped tokens** — `read` < `write` < `admin`, capped by the owner's UI role
+  (operators may mint up to `write`, admins up to `admin`). Only the SHA-256
+  digest is stored; the plaintext is shown **once** at creation.
+- **Per-token source-IP restriction** (`allowed_ips`) on top of the global
+  allowlist, plus optional expiry and instant revocation. Self-service rotation
+  via `POST /api/tokens/{id}/revoke`.
+- **Every authenticated API call is audit-logged** (`api.call`) and updates the
+  token's `last_used_at`. **PSKs and private keys are never exposed** — PSKs are
+  redacted from params + generated config (with a `psk_set` flag), and CA/leaf
+  private keys are never serialised. See [`docs/api.md`](docs/api.md).
 
 ### PKI
 - Multi-level CA hierarchy: **root → intermediate(s) → issuing** CA.
 - CA private keys are stored **AES-256-GCM encrypted** with the app KEK and are
   **never returned** by any route — a key is decrypted transiently in memory for
   one signing operation only.
+- **Identity by certificate fingerprint** — a CA/cert's name is just a label;
+  duplicate names auto-deduplicate and the **same certificate can't be added
+  twice**.
 - **Import** an existing CA from pasted PEM, a PEM bundle, or a **PKCS#12
   (.p12/.pfx)** file — cert-only or cert+key. Imported cert-only CAs cannot sign.
 - **Create** root / intermediate / issuing CAs (EC or RSA).
+- **Offline-parent CSR workflow** — when a child's parent was imported cert-only
+  (key offline), VCM generates the child's key + a CSR to **download**, then you
+  **upload the signed cert to complete** it (validated against the generated key
+  and recorded parent); regenerate or discard a pending CA at will.
 - **Sign CSRs** into end-entity (appliance) certificates with SAN support.
-- **Lock/unlock** delete-protection on CAs and certs; typed-confirmation and
-  cascade rules guard deletion.
+- **Import / observe leaf certs** — track third-party certificates for expiry
+  without managing them; the signing CA is **auto-detected and validated** (or you
+  observe it unlinked). **Expiry tracking** flags ≤ 90 days (warning) / ≤ 30 days
+  (critical) with dashboard metrics, and **replace-on-renewal** supersedes an
+  observed cert with a managed one so it drops out of the warnings.
+- **Lock/unlock** delete-protection on CAs and certs (**CAs are locked by
+  default**); typed-confirmation and cascade rules guard deletion.
 - Download a CA cert, a full chain, a leaf cert, or a leaf + chain (PEM); browse
   the hierarchy as JSON (`/pki/tree.json`) — public data only.
 
@@ -105,11 +135,28 @@ audit log.
 - **Both-sides generation** — mirror the crypto to produce a guaranteed-compatible
   far-end config, either as a throwaway view or persisted as a paired connection
   (create a new far-end, or update an existing one).
-- **Peer & BGP inference** — VCM suggests likely peers by matching public IPs and
-  protected subnets (you confirm the pairing), and can infer BGP-over-tunnel
-  peering from tunnel addresses.
-- **Import** existing configs (paste or upload) to seed the "existing site"
-  database; PSKs and encrypted passwords are **redacted before storage**.
+- **Peer & BGP inference** — VCM suggests likely peers by matching public IPs,
+  protected subnets, shared tunnel subnets and cross-referencing connection/site
+  names (you confirm the pairing), and can infer BGP-over-tunnel peering from
+  tunnel addresses. A cross-site **Relationships** page lists every presumed
+  pairing for approval; a **Reconcile** page merges duplicate sites.
+- **Side-by-side diff + explicit approval** — edits, pairings and inferred-BGP
+  changes render a before/after diff you must confirm before any config is
+  written.
+- **Dynamic / DDNS endpoints** — hostname and no-fixed-IP peers are handled per
+  vendor (responder mode, aggressive mode, DDNS re-resolution), with a warning
+  that AWS/Azure customer gateways still require a **static** public IP.
+- **Import** existing configs (paste or upload, incl. **Digi ZIP backups**) to
+  seed the "existing site" database; PSKs and encrypted passwords are **redacted
+  before storage**, BGP/tunnel info is captured, and the **original device config
+  is preserved verbatim** (never regenerated). Re-importing a known site offers
+  **update-or-duplicate** with a diff.
+- **Interop mismatch check** — a paired connection shows a side-by-side proposals
+  table and flags Phase 1/Phase 2 mismatches with remediation (the imported side
+  is authoritative).
+- **Config visibility** — the IPsec + BGP config is visible to everyone
+  (collapsed by default); the **full imported device config is admin-only**, with
+  a **set / curly** Junos format toggle.
 - **Edit / rename** connections; renaming emits the device's in-place rename
   syntax where the platform supports it.
 
@@ -274,8 +321,11 @@ verified in code and tests:
   directly.
 - **Import** accepts PEM or PKCS#12; a supplied private key must match the
   certificate's public key, and an imported CA is auto-linked to a parent whose
-  subject matches its issuer. Cert-only imports can't sign, and creating a child
-  under a keyless parent fails with a clear error.
+  subject matches its issuer. Cert-only imports can't sign; creating a child under
+  such a **keyless (offline) parent** starts the **CSR workflow** — VCM generates
+  the child's key + CSR, you get it signed offline and upload the cert to complete
+  it. Identity is the cert **fingerprint**: the same cert can't be added twice and
+  duplicate names auto-deduplicate.
 - **Deletion** is guarded: certs need their **serial** re-typed, CAs need their
   **name** re-typed; a non-empty CA needs explicit **cascade**; and a **locked**
   CA/cert (or a locked item anywhere in a cascade subtree) blocks deletion until
@@ -347,22 +397,27 @@ routes also pass the source-IP allowlist.
 `GET /healthz` (unauthenticated JSON health check).
 
 **PKI (`app/routers/pki.py`, prefix `/pki`)** — `GET /pki`, `GET /pki/tree.json`,
-`POST /pki/ca` (admin), `POST /pki/ca/import` (admin),
+`POST /pki/ca` (admin), `GET /pki/ca/{id}`, `GET /pki/ca/{id}/csr`,
+`POST /pki/ca/{id}/complete` (admin), `POST /pki/ca/{id}/new-csr` (admin),
+`POST /pki/ca/{id}/discard` (admin), `POST /pki/ca/import` (admin),
 `POST /pki/ca/{id}/delete` (admin), `POST /pki/ca/{id}/lock` (admin),
 `GET /pki/ca/{id}/chain`, `GET /pki/ca/{id}/cert`, `POST /pki/sign`,
-`GET /pki/cert/{id}`, `GET /pki/cert/{id}/pem`, `POST /pki/cert/{id}/delete`
-(admin), `POST /pki/cert/{id}/lock` (admin).
+`POST /pki/cert/import` (admin), `GET /pki/cert/{id}`, `GET /pki/cert/{id}/pem`,
+`POST /pki/cert/{id}/delete` (admin), `POST /pki/cert/{id}/lock` (admin),
+`POST /pki/cert/{id}/replace` (admin).
 
 **Sites (`app/routers/sites.py`, prefix `/sites`)** — `GET /sites`,
-`POST /sites/generate`, `GET/POST /sites/import`, `GET /sites/{id}`,
-`POST /sites/{id}/connections`, `POST /sites/{id}/delete` (admin).
+`POST /sites/generate`, `GET/POST /sites/import`, `GET /sites/reconcile`,
+`POST /sites/merge` (admin), `GET /sites/{id}`, `POST /sites/{id}/connections`,
+`POST /sites/{id}/delete` (admin).
 
 **Connections (`app/routers/sites.py`, prefix `/connections`)** —
-`GET /connections/{id}`, `GET/POST /connections/{id}/edit`,
-`GET /connections/{id}/config`, `GET /connections/{id}/far-end[.txt]`,
-`POST /connections/{id}/peer`, `POST /connections/{id}/rename`,
-`POST /connections/{id}/pair-confirm`, `POST /connections/{id}/apply-bgp`,
-`POST /connections/{id}/unpair`, `POST /connections/{id}/delete` (admin).
+`GET /connections/relationships`, `GET /connections/{id}`,
+`GET/POST /connections/{id}/edit`, `GET /connections/{id}/config`,
+`GET /connections/{id}/far-end[.txt]`, `POST /connections/{id}/peer`,
+`POST /connections/{id}/rename`, `POST /connections/{id}/pair-confirm`,
+`POST /connections/{id}/apply-bgp`, `POST /connections/{id}/unpair`,
+`POST /connections/{id}/delete` (admin).
 
 **Profile (`app/routers/profile.py`, prefix `/profile`)** — `GET /profile`,
 `POST /profile/contact`, `POST /profile/password`,
@@ -373,7 +428,8 @@ routes also pass the source-IP allowlist.
 **REST API (`app/routers/api.py`, prefix `/api`)** — a JSON surface
 authenticated with API **bearer tokens** (not the session cookie): `GET /api/whoami`,
 `GET /api/sites`, `GET /api/sites/{id}`, `GET /api/certificates`,
-`GET /api/pki/tree`, `GET /api/audit` (admin scope), and
+`GET /api/pki/tree`, `GET /api/audit` (admin scope),
+`GET /api/audit/verify` (admin scope), and
 `POST /api/tokens/{id}/revoke` (write scope). Full reference — auth, scopes,
 the IP-allowlist caveat, per-endpoint curl/JSON examples and errors — is in
 [`docs/api.md`](docs/api.md).
@@ -399,13 +455,14 @@ SQLAlchemy models in `app/models.py`:
 | `webauthn_challenges` | Short-lived registration/authentication challenges. |
 | `sessions` | Server-side sessions: token id, user, expiry, `mfa_ok`, client IP, remembered `next_url`. |
 | `ip_allowlist` | Source-IP allow entries (CIDR, description, enabled). |
-| `cert_authorities` | CAs: type (root/intermediate/issuing), parent, subject, cert PEM, **KEK-encrypted key**, key type/params, serial counter, validity, `path_len`, `locked`. |
-| `certificates` | Issued end-entity certs: CA ref, optional site ref, serial, subject, SAN, cert & CSR PEM, status, `locked`, validity. |
+| `api_tokens` | REST bearer tokens: owner, name, **SHA-256 hash** + display `prefix`, `scope`, optional per-token `allowed_ips`, `last_used_at`, `expires_at`, `revoked`. |
+| `cert_authorities` | CAs: type (root/intermediate/issuing), parent, subject, cert PEM, **cert `fingerprint`** (identity/dedup), **KEK-encrypted key**, key type/params, serial counter, validity, `path_len`, `locked` (default `True`), `pending` + `csr_pem` (offline-parent CSR workflow). |
+| `certificates` | End-entity certs: optional CA ref, optional site ref, serial, subject, SAN, cert & CSR PEM, `fingerprint`, status, `managed`, `source` (issued/imported), `replaced_by_id` (superseded-on-renewal), `locked`, validity. |
 | `defaults` | Key/value JSON store for app-wide VPN defaults. |
 | `sites` | A device/firewall: name, vendor, model, source (generated/imported). |
-| `vpn_connections` | A tunnel on a site: params JSON, generated config, source, `needs_review`, optional `peer_connection_id`. |
+| `vpn_connections` | A tunnel on a site: params JSON, generated config, **verbatim `imported_config`**, source, `needs_review` + `review_note`, optional `peer_connection_id`. |
 | `backups` | Versioned, encrypted state snapshots (SHA-256 of plaintext, size, payload). |
-| `audit_log` | Timestamped action log (user, action, detail, IP). |
+| `audit_log` | Timestamped action log (user, action, detail, IP) with hash-chain `prev_hash` / `entry_hash`. |
 
 ---
 
@@ -459,11 +516,12 @@ app/
   backup.py            encrypted versioned backup/restore
   notify.py            SMTP / Mailgun / Twilio backends
   templates_env.py     Jinja environment
-  security/            crypto (KEK), passwords (Argon2), sessions, MFA, IP filter, deps
+  security/            crypto (KEK), passwords (Argon2), sessions, MFA, IP filter,
+                       API tokens, audit hash-chain, deps
   pki/                 key gen, CA hierarchy + signing, CSR, PEM/PKCS#12 import
   srx/                 proposals catalog, vendor-neutral model, generators, importer,
-                       defaults, BGP, rename, peer/BGP inference
-  routers/             auth, pki, sites, profile, admin, ui
+                       defaults, BGP, rename, diff, interop, peer/BGP inference
+  routers/             auth, pki, sites, profile, admin, api, ui
   templates/ static/   Jinja UI + theme + WebAuthn JS
 deploy/                traefik / nginx / cloudflared overlays + notes
 docs/                  extended documentation (this README links into it)
@@ -481,16 +539,18 @@ Dockerfile             slim python:3.12 image, non-root, uvicorn
 .venv/bin/pytest tests/test_core.py
 ```
 
-`tests/test_core.py` covers the crypto rating & de-duplication logic, per-vendor
-generation and generate→import round-trips, SRX identity/selector rules,
-structured-Junos and pfSense `config.xml` imports (asserting PSKs are **not**
-persisted), AWS import-only + far-end generation, peer/BGP inference, the PKI
-hierarchy and CSR signing (asserting private keys are never exported), CA/cert
-import (PEM + PKCS#12), lock/cascade delete rules, backup/restore round-trips,
-the additive schema sync, and end-to-end HTTP flows (login → MFA → generate/edit,
-forced password change, next-URL redirect, admin cert delete). CI runs the suite
-and a container smoke test on every PR; merges to `main` build a multi-arch image
-and publish a release.
+The suite spans `tests/test_core.py`, `tests/test_audit_chain.py` (hash-chain
+build / verify / tamper detection / backfill) and `tests/test_collapse_panels.py`
+(default-collapsed UI panels). `test_core.py` covers the crypto rating &
+de-duplication logic, per-vendor generation and generate→import round-trips, SRX
+identity/selector rules, structured-Junos and pfSense `config.xml` imports
+(asserting PSKs are **not** persisted), AWS import-only + far-end generation,
+peer/BGP inference, the PKI hierarchy and CSR signing (asserting private keys are
+never exported), CA/cert import (PEM + PKCS#12), lock/cascade delete rules,
+backup/restore round-trips, the additive schema sync, and end-to-end HTTP flows
+(login → MFA → generate/edit, forced password change, next-URL redirect, admin
+cert delete). CI runs the suite and a container smoke test on every PR; merges to
+`main` build a multi-arch image and publish a release.
 
 ---
 

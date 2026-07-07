@@ -18,8 +18,21 @@ Rules enforced in `app/pki/ca.py`:
   overridden.
 - `sign_csr` **refuses to issue leaf certs directly from a root** — leaves come
   from intermediate/issuing CAs.
-- You cannot create a child under a parent that has no usable private key
-  (an imported cert-only CA) — it raises a clear `ValueError`.
+- A child under a parent whose signing key is **offline** (a cert-only import)
+  is not rejected — instead it is created **pending** via the CSR workflow (see
+  [Offline-parent CSR workflow](#offline-parent-csr-workflow)).
+
+## Identity is the certificate fingerprint
+
+A CA's `name` is a **human label, not its identity** — the stable identity is the
+SHA-256 fingerprint of the certificate (DER), stored in
+`CertAuthority.fingerprint` / `Certificate.fingerprint` (both indexed):
+
+- On **create or import**, a colliding name is auto-deduplicated (`_unique_ca_name`
+  appends `-2`, `-3`, …) rather than rejected.
+- Importing the **same certificate twice is refused** — `_reject_duplicate_ca_cert`
+  (CAs) and the leaf-import path both look up the fingerprint and error out ("The
+  same certificate cannot be added twice"), regardless of the name entered.
 
 ## Keys & the KEK envelope
 
@@ -78,13 +91,40 @@ Import logic (`import_ca`):
   sign; imported serial counters start high (`0x1000000`) to avoid colliding with
   externally-issued serials.
 
+## Offline-parent CSR workflow
+
+When a new intermediate/issuing CA's parent was imported **cert-only** (its
+private key is kept offline), VCM cannot sign locally. Instead `create_ca`
+generates the new CA's keypair and a **CA-requesting CSR**, and parks the row as
+`pending=True` with `csr_pem` set and an empty `cert_pem` (`_create_pending_ca`).
+The flow:
+
+1. **Create** the CA — you land on its detail page in the *pending* state
+   (audited `pki.ca_csr_created`).
+2. **Download the CSR** (`GET /pki/ca/{id}/csr`, `application/pkcs10`) and have
+   the offline parent sign it.
+3. **Upload the signed cert** (`POST /pki/ca/{id}/complete`, paste PEM or upload
+   PEM/DER). `complete_pending_ca` validates that the cert **certifies this CA's
+   generated key**, that it is a CA cert (missing/`CA:FALSE` BasicConstraints is
+   rejected unless you tick *accept anyway* → `allow_non_ca`), and that its
+   issuer matches the recorded parent; it also refuses a fingerprint that already
+   belongs to another CA. On success `pending` clears and the CA becomes usable
+   (audited `pki.ca_completed`).
+4. **Regenerate** (`POST /pki/ca/{id}/new-csr`) makes a fresh key + CSR reusing
+   the subject/key params, or **Discard** (`POST /pki/ca/{id}/discard`) deletes
+   the incomplete CA outright — no unlock/name-confirm gate, since a pending CA is
+   never usable and has no dependents.
+
+While pending, `can_sign` is `False` and the chain/cert routes return `409`.
+
 ## Signing a CSR
 
-`POST /pki/sign`. Parses and validates the CSR self-signature, then issues an
-end-entity certificate from the chosen **issuing** CA (`valid_days` default 825,
-plus comma-separated `san_dns`). The signed cert and the submitted CSR are stored
-in `certificates`. Download a leaf cert (`/pki/cert/{id}/pem`), or leaf + chain
-(`?fmt=chain`), and view/download a CA chain (`/pki/ca/{id}/chain`).
+`POST /pki/sign`. Accepts a pasted or uploaded CSR, parses and validates its
+self-signature, then issues an end-entity certificate from the chosen **issuing**
+CA (`valid_days` default 825, plus comma-separated `san_dns`). The signed cert
+and the submitted CSR are stored in `certificates` (with the leaf's fingerprint).
+Download a leaf cert (`/pki/cert/{id}/pem`), or leaf + chain (`?fmt=chain`), and
+view/download a CA chain (`/pki/ca/{id}/chain`).
 
 ### Appliance keypairs
 
@@ -92,10 +132,41 @@ in `certificates`. Download a leaf cert (`/pki/cert/{id}/pem`), or leaf + chain
 CSR server-side. The **private key PEM is returned to the caller exactly once and
 never persisted** — CSR-based issuance (device-generated key) is preferred.
 
+## Importing / observing leaf certificates
+
+`POST /pki/cert/import` (admin) imports an existing **end-entity** certificate
+for **observation only** — it is tracked for expiry but `managed=False` and
+`source="imported"`, so VCM cannot renew or revoke it. Accepts pasted PEM or an
+uploaded PEM/DER file. Behaviour:
+
+- A **CA certificate is rejected** here (import it under *Import existing CA*).
+- The **same fingerprint can't be tracked twice** (managed or observed).
+- The **signing CA is auto-detected** (`find_issuer_ca` — subject matches issuer
+  **and** the signature verifies). If it can't be determined, the operator is
+  prompted to pick the issuer (`cert_import_ca.html`); the choice is **validated**
+  with `verify_signed_by`, or you can choose *External CA (not in VCM)* to observe
+  it unlinked (`ca_id = NULL`).
+
+### Expiry tracking & replace-on-renewal
+
+`classify_expiry()` (`app/models.py`) buckets every non-revoked, non-superseded
+cert by `not_after`: **`critical` ≤ 30 days**, **`warning` ≤ 90 days**,
+`expired`, else `ok` (thresholds `EXPIRY_CRITICAL_DAYS` / `EXPIRY_WARNING_DAYS`).
+The **dashboard** (`app/routers/ui.py`) counts expired/critical/warning across
+**both managed and observed** certs and lists the soonest-expiring few.
+
+When you renew an observed cert by issuing a managed one, mark the old cert as
+**superseded** via `POST /pki/cert/{id}/replace` (sets `replaced_by_id` to the
+chosen managed cert). A superseded cert (`is_superseded`) drops out of the expiry
+metrics; posting an empty replacement clears the link. Only observed certs can be
+superseded this way.
+
 ## Deletion & locking (delete-protection)
 
 Both CAs and certificates have a `locked` boolean toggled by admins
-(`POST /pki/ca/{id}/lock`, `POST /pki/cert/{id}/lock`).
+(`POST /pki/ca/{id}/lock`, `POST /pki/cert/{id}/lock`). **CAs are locked by
+default** (`CertAuthority.locked` defaults to `True`), so deleting one is a
+deliberate two-step action (unlock, then delete); certificates default unlocked.
 
 **Deleting a certificate** (`POST /pki/cert/{id}/delete`, admin): the operator
 must re-type the exact `serial`; a locked cert is refused. Only the leaf record
