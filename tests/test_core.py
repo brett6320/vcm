@@ -2361,3 +2361,32 @@ def test_mfa_page_auto_attempts_passkey_when_enrolled():
 
     js = open("app/static/webauthn.js").read()
     assert "passkey-auto" in js and "authPasskey({ auto: true })" in js
+
+
+def test_backup_download_filename_includes_date():
+    import re, datetime
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal, init_db
+    from app.models import User, Role, Backup, utcnow
+    from app.security.passwords import hash_password
+    import pyotp
+    init_db()
+    with SessionLocal() as db:
+        if not db.query(User).filter_by(username="bkadm").first():
+            db.add(User(username="bkadm", password_hash=hash_password("pw123456"),
+                        role=Role.admin))
+        v = (db.query(Backup).count() or 0) + 1
+        made = datetime.datetime(2026, 3, 4, tzinfo=datetime.timezone.utc)
+        b = Backup(version=v, created_at=made, created_by="bkadm", sha256="x" * 64,
+                   size=3, payload=b"abc")
+        db.add(b); db.commit()
+        bid = b.id
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        c.post("/login", data={"username": "bkadm", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+        r = c.get(f"/admin/backups/{bid}/download")
+        assert r.status_code == 200
+        cd = r.headers["content-disposition"]
+        assert f"vcm-backup-v{v}-2026-03-04.vcmbak" in cd

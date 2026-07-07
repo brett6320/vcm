@@ -217,7 +217,10 @@ def backups_download(bid: int, db: Session = Depends(get_db),
     b = db.get(Backup, bid)
     if not b:
         raise HTTPException(404, "Not found")
-    fname = f"vcm-backup-v{b.version}.vcmbak"
+    # Include the backup's date in the filename (created date, else today UTC).
+    from datetime import datetime, timezone
+    dt = b.created_at or datetime.now(timezone.utc)
+    fname = f"vcm-backup-v{b.version}-{dt.strftime('%Y-%m-%d')}.vcmbak"
     return Response(b.payload, media_type="application/octet-stream",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
