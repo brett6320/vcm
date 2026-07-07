@@ -184,3 +184,8 @@ table.proposals tr.prop-section td { font-weight: 600; background: var(--card);
 table.proposals tr.prop-mismatch td:nth-child(2),
 table.proposals tr.prop-mismatch td:nth-child(3) {
   background: color-mix(in srgb, var(--danger) 16%, transparent); font-weight: 600; }
+
+/* Audit-log per-line integrity marker: plain green check / red X (no wrap). */
+td.audit-valid { text-align: center; white-space: nowrap; font-size: 1rem; font-weight: 700; }
+td.audit-valid .ok { color: var(--ok); }
+td.audit-valid .bad { color: var(--danger); }
