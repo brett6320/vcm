@@ -57,8 +57,9 @@
     {% endfor %}
     {% endfor %}
   </table>
-  <p class="muted">Phase-1/2 proposal values must match on both ends; highlighted rows
-    differ{% if not peer %} (far end shown is the on-the-fly mirror){% endif %}.</p>
+  <p class="muted">Values as configured on each node. Phase-1/2 proposals must match on
+    both ends; highlighted rows differ.{% if not peer %} No peer is paired yet, so the
+    far column is empty — pair a far end to compare.{% endif %}</p>
 </div>
 {% endif %}
 
