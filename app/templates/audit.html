@@ -2,12 +2,41 @@
 {% block content %}
 <h1>Audit log</h1>
 <div class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap">
+    {% if integrity and integrity.ok %}
+    <span class="alert notice" style="margin:0">
+      &#10003; Chain integrity intact &mdash; verified {{ integrity.checked }} entr{{ 'y' if integrity.checked == 1 else 'ies' }}.
+    </span>
+    {% elif integrity %}
+    <span class="alert error" style="margin:0">
+      &#9888; Chain integrity broken at entry id {{ integrity.broken_id }}
+      ({{ integrity.reason }}). Verified {{ integrity.checked }} of {{ integrity.total }} entries before the break.
+    </span>
+    {% endif %}
+    <a role="button" class="btn" href="/admin/audit">Verify</a>
+  </div>
+</div>
+<div class="card">
+  <p class="muted">Each line is validated independently: <strong>prev</strong> links to the
+    previous entry's hash and <strong>entry_hash</strong> = sha256(prev_hash + entry). Hover a
+    hash for its full value.</p>
   <table>
-    <tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th></tr>
+    <tr><th>Valid</th><th>Time</th><th>User</th><th>Action</th><th>Detail</th><th>IP</th>
+        <th>prev_hash</th><th>entry_hash</th></tr>
     {% for r in rows %}
-    <tr><td class="muted">{{ r.ts.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+    {% set st = statuses.get(r.id) if statuses else None %}
+    <tr{% if st and not st.ok %} class="sev-broken"{% endif %}>
+        <td>{% if st and st.ok %}<span class="badge badge-ok" title="valid">&#10003; valid</span>
+            {% elif st %}<span class="badge badge-critical" title="{{ st.reason }}">&#10007; broken</span>
+            {% endif %}</td>
+        <td class="muted">{{ r.ts.strftime('%Y-%m-%d %H:%M:%S') }}</td>
         <td>{{ r.username or '—' }}</td><td>{{ r.action }}</td>
-        <td class="muted">{{ r.detail or '' }}</td><td>{{ r.ip or '' }}</td></tr>
+        <td class="muted">{{ r.detail or '' }}</td><td>{{ r.ip or '' }}</td>
+        <td class="muted"><code title="{{ r.prev_hash or '' }}">{{ (r.prev_hash or '—')[:12] }}</code>
+            {% if st and not st.link_ok %}<span class="sev-broken" title="does not match the previous entry's hash">&#9888;</span>{% endif %}</td>
+        <td class="muted"><code title="{{ r.entry_hash or '' }}">{{ (r.entry_hash or '—')[:12] }}</code>
+            {% if st and not st.hash_ok %}<span class="sev-broken" title="recomputed {{ st.computed[:12] }}… — stored value was altered">&#9888;</span>{% endif %}</td>
+    </tr>
     {% endfor %}
   </table>
 </div>

@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import get_db
-from ..models import AuditLog, IPAllowEntry, Role, User
-from . import ipfilter, sessions
+from ..models import AuditLog, IPAllowEntry, Role, User, utcnow
+from . import audit_chain, ipfilter, sessions
 
 
 class AuthRedirect(Exception):
@@ -19,12 +19,23 @@ class AuthRedirect(Exception):
 
 def audit(db: Session, request: Request, action: str, detail: str | None = None,
           user: User | None = None) -> None:
+    # Chain each entry to the current head so the log is tamper-evident. Flush
+    # first so any audit rows added earlier in this same request are persisted
+    # and visible as the chain head before we read it.
+    db.flush()
+    ts = utcnow()
+    username = user.username if user else None
+    ip = ipfilter.client_ip(request)
+    prev_hash = audit_chain.chain_head(db)
     db.add(AuditLog(
         user_id=user.id if user else None,
-        username=user.username if user else None,
+        username=username,
         action=action,
         detail=detail,
-        ip=ipfilter.client_ip(request),
+        ip=ip,
+        ts=ts,
+        prev_hash=prev_hash,
+        entry_hash=audit_chain.entry_hash(prev_hash, ts, username, action, detail, ip),
     ))
 
 

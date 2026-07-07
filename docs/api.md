@@ -32,6 +32,7 @@ hashing and authentication live in `app/security/apitokens.py`; the
   - [GET /api/certificates](#get-apicertificates)
   - [GET /api/pki/tree](#get-apipkitree)
   - [GET /api/audit](#get-apiaudit)
+  - [GET /api/audit/verify](#get-apiauditverify)
   - [POST /api/tokens/{token_id}/revoke](#post-apitokenstoken_idrevoke)
 - [Audit logging](#audit-logging)
 - [Security notes](#security-notes)
@@ -402,6 +403,51 @@ curl -sS "https://vcm.example.com/api/audit?limit=50" \
 
 Entries are newest-first. A `read` or `write` token calling this endpoint gets a
 `403` insufficient-scope error.
+
+### GET /api/audit/verify
+
+Re-walk the audit-log **hash chain** and report its integrity. **Admin-scoped.**
+
+Each audit row carries `prev_hash` and `entry_hash`, where
+`entry_hash = sha256(prev_hash + canonical(row))` over the immutable fields
+(timestamp, username, action, detail, IP) and `prev_hash` is the previous row's
+`entry_hash` (the first row uses a fixed zero genesis seed). Verification
+re-walks the chain in id order.
+
+- **Scope:** `admin`
+- **Body:** none
+
+```bash
+curl -sS "https://vcm.example.com/api/audit/verify" \
+  -H "Authorization: Bearer vcm_ADMINtokenREDACTED"
+```
+
+Intact chain:
+
+```json
+{ "ok": true, "total": 9021, "checked": 9021, "broken_id": null, "broken_index": null, "reason": null }
+```
+
+Tampered chain — pinpoints the first broken row:
+
+```json
+{ "ok": false, "total": 9021, "checked": 512, "broken_id": 513, "broken_index": 512,
+  "reason": "entry_hash mismatch (modified entry)" }
+```
+
+The same status is shown on the admin **Audit log** page, with a **Verify**
+button to re-run the check. That page also renders each entry's `prev_hash` and
+`entry_hash` (abbreviated, full value on hover) and a per-line **valid / broken**
+badge — each row is validated independently (its `entry_hash` is recomputed and
+its `prev_hash` link to the previous row is checked) so an operator can see the
+chain and exactly which line(s) fail, alongside the overall summary.
+
+> **Caveat.** Hash chaining detects casual tampering: editing, deleting, or
+> reordering existing entries all break the chain and are pinpointed. It does
+> **not** stop an attacker with full database write access, who could recompute
+> the entire chain after tampering. Stronger integrity requires periodically
+> anchoring the head `entry_hash` to an external append-only store — tracked as
+> a follow-up.
 
 ### POST /api/tokens/{token_id}/revoke
 
