@@ -707,7 +707,7 @@ def edit_connection(conn_id: int, request: Request,
 
 @conn_router.get("/{conn_id}/config")
 def connection_config(conn_id: int, db: Session = Depends(get_db),
-                      user: User = Depends(require_admin)):
+                      user: User = Depends(current_user)):
     conn = db.get(VpnConnection, conn_id)
     if not conn:
         raise HTTPException(404, "Not found")
@@ -726,7 +726,7 @@ def _far_end_profile(conn: VpnConnection, vendor: str | None) -> VpnProfile:
 
 @conn_router.get("/{conn_id}/far-end")
 def far_end_view(conn_id: int, request: Request, vendor: str = "",
-                 db: Session = Depends(get_db), user: User = Depends(require_admin)):
+                 db: Session = Depends(get_db), user: User = Depends(current_user)):
     conn = db.get(VpnConnection, conn_id)
     if not conn:
         raise HTTPException(404, "Not found")
@@ -739,7 +739,7 @@ def far_end_view(conn_id: int, request: Request, vendor: str = "",
 
 @conn_router.get("/{conn_id}/far-end.txt")
 def far_end_download(conn_id: int, vendor: str = "", db: Session = Depends(get_db),
-                     user: User = Depends(require_admin)):
+                     user: User = Depends(current_user)):
     conn = db.get(VpnConnection, conn_id)
     if not conn:
         raise HTTPException(404, "Not found")
