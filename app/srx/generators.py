@@ -229,8 +229,12 @@ def gen_digi(p: VpnProfile) -> str:
 def gen_cradlepoint(p: VpnProfile) -> str:
     v = "cradlepoint"
     n = p.name
+    # NCOS has no VTI/tunnel-interface concept (policy-based only); the tunnel
+    # binds to a WAN uplink instead — usually just "WAN".
+    wan = p.wan_interface or "WAN"
     lines = [f"# ---- Cradlepoint NCOS IPsec tunnel: {n} ----",
              f"config set vpn/tunnels/{n}/enabled true",
+             f"config set vpn/tunnels/{n}/local_interface {wan}",
              f"config set vpn/tunnels/{n}/ike/version "
              f"{'2' if p.phase1.ike_version == 'ikev2' else '1'}",
              f"config set vpn/tunnels/{n}/remote_gateway {p.remote.public_ip}",

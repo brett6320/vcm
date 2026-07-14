@@ -42,8 +42,9 @@
     </div>
     <fieldset style="margin-top:.8rem"><legend>Interfaces &amp; routing (optional)</legend>
       <div class="row3">
-        <div><label>Tunnel interface</label><input name="tunnel_interface" value="{{ profile.tunnel_interface }}" placeholder="st0.0 / tunnel.1"></div>
-        <div><label>WAN / external interface</label><input name="wan_interface" value="{{ profile.wan_interface }}" placeholder="ge-0/0/0 / wan1 / …"></div>
+        <div><label>Tunnel interface <span class="muted">(route-based vendors only, e.g. SRX/Palo Alto; not used by Cradlepoint, pfSense, etc)</span></label>
+        <input name="tunnel_interface" value="{{ profile.tunnel_interface }}" placeholder="st0.0 / tunnel.1"></div>
+        <div><label>WAN / external interface</label><input name="wan_interface" value="{{ profile.wan_interface }}" placeholder="ge-0/0/0 / wan1 / WAN / …"></div>
         <div><label>Tunnel interface IP</label><input name="tunnel_ip" value="{{ profile.tunnel_ip }}" placeholder="169.254.0.1/30"></div>
       </div>
       <label>Far-end platform <span class="muted">(decides whether SRX traffic-selectors are needed)</span></label>

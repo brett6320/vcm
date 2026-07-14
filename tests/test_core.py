@@ -293,6 +293,14 @@ def test_pfsense_backup_import():
     assert "SUPERSECRETKEY" not in blob and "ignoreme" not in blob
 
 
+def test_cradlepoint_uses_wan_interface():
+    p = _mk_profile(vendor="cradlepoint")
+    # default WAN when unset
+    assert "local_interface WAN" in generators.generate(p)
+    p.wan_interface = "modem1"
+    assert "local_interface modem1" in generators.generate(p)
+
+
 def test_all_vendors_generate():
     for v in ("juniper_srx", "digi", "cradlepoint", "pfsense", "fortinet",
               "palo_alto", "cisco_firepower", "strongswan", "mikrotik"):
