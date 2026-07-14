@@ -17,7 +17,8 @@
         <input name="local_subnets" value="{{ profile.local.protected_subnets | join(', ') }}" required>
       </fieldset>
       <fieldset><legend>Remote endpoint</legend>
-        <label>Public IP *</label><input name="remote_ip" value="{{ profile.remote.public_ip }}" required>
+        <label>Public IP <span class="muted">(blank = dynamic/responder-only)</span></label>
+        <input name="remote_ip" value="{{ profile.remote.public_ip }}" placeholder="leave blank if peer has no fixed IP">
         <label>IKE ID <span class="muted">(blank = auto)</span></label>
         <input name="remote_id" value="{{ profile.remote.id }}">
         <label>Protected subnets *</label>

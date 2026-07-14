@@ -600,6 +600,37 @@ def test_edit_connection():
             assert conn.name == "EE-vpn"                          # name unchanged
 
 
+def test_generate_site_dynamic_peer():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.db import SessionLocal
+    from app.models import User, Role, VpnConnection
+    from app.security.passwords import hash_password
+    import pyotp, re, json
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        with SessionLocal() as db:
+            if not db.query(User).filter_by(username="dyn").first():
+                db.add(User(username="dyn", password_hash=hash_password("pw123456"),
+                            role=Role.admin))
+                db.commit()
+        c.post("/login", data={"username": "dyn", "password": "pw123456"})
+        sec = re.search(r"Secret: <code>([A-Z2-7]+)</code>", c.get("/mfa/enroll").text).group(1)
+        c.post("/mfa/enroll/totp", data={"code": pyotp.TOTP(sec).now()})
+        # remote_ip left blank: peer has no fixed IP, this side must be responder
+        r = c.post("/sites/generate", data=dict(name="DYN", vendor="juniper_srx",
+                   local_ip="1.1.1.1", remote_ip="", remote_id="peer.dyn.example.com",
+                   local_subnets="10.1.0.0/24",
+                   remote_subnets="10.2.0.0/24", auth_method="certificate"),
+                   follow_redirects=False)
+        assert r.status_code == 303
+        cid = int(r.headers["location"].split("/")[-1])
+        with SessionLocal() as db:
+            conn = db.get(VpnConnection, cid)
+            p = json.loads(conn.params_json)
+            assert p["remote"]["public_ip"] == ""
+            assert "dynamic hostname" in conn.generated_config
+
+
 def test_infer_peers_suggest_only():
     from fastapi.testclient import TestClient
     from app.main import app
