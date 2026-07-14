@@ -41,7 +41,8 @@
         <label>Protected subnets *</label><input name="local_subnets" required>
       </fieldset>
       <fieldset><legend>Remote endpoint</legend>
-        <label>Public IP *</label><input name="remote_ip" required>
+        <label>Public IP <span class="muted">(blank = dynamic/responder-only)</span></label>
+        <input name="remote_ip" placeholder="leave blank if peer has no fixed IP">
         <label>IKE ID <span class="muted">(blank = auto)</span></label><input name="remote_id">
         <label>Protected subnets *</label><input name="remote_subnets" required>
       </fieldset>

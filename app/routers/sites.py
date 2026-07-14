@@ -149,8 +149,8 @@ def _validate_endpoints(remote_ip, local_subnets, remote_subnets, auth_method, p
     if local_ip is not None and not local_ip.strip():
         # Needed so the far-end/peer config has a real remote gateway address.
         errors.append("Local public IP (this device's address) is required")
-    if not remote_ip.strip():
-        errors.append("Remote (far-end) public IP is required")
+    # Blank remote_ip is allowed: addr_kind()/_addr_is_dynamic() treat it as a
+    # dynamic/responder-only peer (no fixed address) rather than an error.
     if not _subnets(local_subnets):
         errors.append("At least one local protected subnet is required")
     if not _subnets(remote_subnets):
