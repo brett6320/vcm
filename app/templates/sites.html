@@ -66,8 +66,9 @@
     </div>
     <fieldset style="margin-top:.8rem"><legend>Interfaces &amp; routing (optional)</legend>
       <div class="row3">
-        <div><label>Tunnel interface</label><input name="tunnel_interface" placeholder="st0.0 / tunnel.1"></div>
-        <div><label>WAN / external interface</label><input name="wan_interface" placeholder="ge-0/0/0 / wan1 / ethernet1/1 / outside"></div>
+        <div><label>Tunnel interface <span class="muted">(route-based vendors only, e.g. SRX/Palo Alto; not used by Cradlepoint, pfSense, etc)</span></label>
+        <input name="tunnel_interface" placeholder="st0.0 / tunnel.1"></div>
+        <div><label>WAN / external interface</label><input name="wan_interface" placeholder="ge-0/0/0 / wan1 / ethernet1/1 / WAN / outside"></div>
         <div><label>Tunnel interface IP</label><input name="tunnel_ip" placeholder="169.254.0.1/30"></div>
       </div>
       <label>Far-end platform <span class="muted">(decides whether SRX traffic-selectors are needed)</span></label>
